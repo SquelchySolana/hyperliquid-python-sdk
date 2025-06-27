@@ -1,2 +1,5 @@
 pandas
 requests
+websocket-client
+pandas_ta
+numpy<2
