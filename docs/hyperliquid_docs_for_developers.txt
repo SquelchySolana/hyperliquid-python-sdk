@@ -1,0 +1,4285 @@
+####FOR DEVELOPERS
+
+Table of Contents
+⦁	API Overview
+⦁	Notation
+⦁	Asset IDs
+⦁	Tick and Lot Size
+⦁	Nonces and API Wallets
+⦁	API Wallets
+⦁	API Wallet Pruning
+⦁	Hyperliquid Nonces
+⦁	Suggestions for Subaccount and Vault Users
+⦁	Info Endpoint
+⦁	Perpetuals vs Spot
+⦁	Retrieve Mids for All Coins
+⦁	Retrieve a User's Open Orders
+⦁	Retrieve a User's Fills
+⦁	Retrieve a User's Fills by Time
+⦁	Candle Snapshot
+⦁	Check Builder Fee Approval
+⦁	Retrieve a User's Historical Orders
+⦁	Retrieve a User's TWAP Slice Fills
+⦁	Query a User's Fees
+⦁	Query a User's Staking Delegations
+⦁	Query a User's Staking Summary
+⦁	Query a User's Staking History
+⦁	Query a User's Staking Rewards
+⦁	Info Endpoint — Perpetuals
+⦁	Retrieve All Perpetual Dexs
+⦁	Retrieve Perpetuals Metadata (Universe and Margin Tables)
+⦁	Retrieve Perpetuals Asset Contexts
+⦁	Retrieve User’s Perpetuals Account Summary
+⦁	Retrieve a User’s Funding History or Non-Funding Ledger Updates
+⦁	Retrieve Historical Funding Rates
+⦁	Retrieve Predicted Funding Rates for Different Venues
+⦁	Query Perps at Open Interest Caps
+⦁	Retrieve Info About the Perp Deploy Auction
+⦁	Info Endpoint — Spot
+⦁	Retrieve Spot Metadata
+⦁	Retrieve Spot Asset Contexts
+⦁	Retrieve a User's Token Balances
+⦁	Retrieve Information About the Spot Deploy Auction
+⦁	Retrieve Information About a Token
+⦁	Exchange Endpoint
+⦁	Place an Order
+⦁	Cancel Order(s)
+⦁	Cancel Order(s) by cloid
+⦁	Schedule Cancel (Dead Man’s Switch)
+⦁	Modify an Order
+⦁	Modify Multiple Orders
+⦁	Update Leverage
+⦁	Update Isolated Margin
+⦁	Core USDC Transfer
+⦁	Core Spot Transfer
+⦁	Initiate a Withdrawal Request
+⦁	Transfer from Spot Account to Perp Account (and vice versa)
+⦁	Send Asset (Testnet Only)
+⦁	Deposit into Staking
+⦁	Withdraw from Staking
+⦁	Delegate or Undelegate Stake from Validator
+⦁	Deposit or Withdraw from a Vault
+⦁	Approve an API Wallet
+
+## API
+
+Documentation for the Hyperliquid public API
+
+You can also use the API via the Hyperliquid Python SDK:
+[https://github.com/hyperliquid-dex/hyperliquid-python-sdk](https://github.com/hyperliquid-dex/hyperliquid-python-sdk)
+
+There is also a Rust SDK (although it is less maintained):
+[https://github.com/hyperliquid-dex/hyperliquid-rust-sdk](https://github.com/hyperliquid-dex/hyperliquid-rust-sdk)
+
+There are also Typescript SDKs written by members of the community:
+[https://github.com/nktkas/hyperliquid](https://github.com/nktkas/hyperliquid)
+[https://github.com/nomeida/hyperliquid](https://github.com/nomeida/hyperliquid)
+
+CCXT also maintains integrations in multiple languages that conforms with the standard CCXT API:
+[https://docs.ccxt.com/#/exchanges/hyperliquid](https://docs.ccxt.com/#/exchanges/hyperliquid)
+
+All example API calls use the Mainnet url ([https://api.hyperliquid.xyz](https://api.hyperliquid.xyz)), but you can make the same requests against Testnet using the corresponding url ([https://api.hyperliquid-testnet.xyz](https://api.hyperliquid-testnet.xyz))
+
+-------------------------------------------------------------------------
+
+# FOR DEVELOPERS
+
+## API
+
+### Notation
+
+The current v0 API currently uses some nonstandard notation. Relevant standardization will be batched into a breaking v1 API change.
+
+#### Notation Table (CSV Format)
+
+```
+Abbreviation,Full name,Explanation
+Px,Price,
+Sz,Size,In units of coin, i.e. base currency
+Szi,Signed size,Positive for long, negative for short
+Ntl,Notional,USD amount, Px * Sz
+Side,Side of trade or book,"B = Bid = Buy, A = Ask = Short. Side is aggressing side for trades."
+Asset,Asset,An integer representing the asset being traded. See below for explanation
+Tif,Time in force,"GTC = good until canceled, ALO = add liquidity only (post only), IOC = immediate or cancel"
+```
+
+---
+
+## Asset IDs
+
+Perpetual endpoints expect an integer for asset, which is the index of the coin found in the meta info response.
+E.g. BTC = 0 on mainnet.
+
+Spot endpoints expect **10000 + spotInfo\["index"]** where spotInfo is the corresponding object in spotMeta that has the desired quote and base tokens. For example, when submitting an order for PURR/USDC, the asset that should be used is 10000 because its asset index in the spot info is 0.
+
+Builder-deployed perps expect **100000 + perp\_dex\_index \* 10000 + index\_in\_meta**.
+For example, test\:ABC on testnet has perp\_dex\_index = 1, index\_in\_meta = 0, asset = 110000.
+Note that builder-deployed perps always have name in the format `{dex}:{coin}`.
+
+### Examples
+
+*Note that spot ID is different from token ID, and that mainnet and testnet have different asset IDs. For example, for HYPE:*
+
+* Mainnet token ID: 150
+* Mainnet spot ID: 107
+* Testnet token ID: 1105
+* Testnet spot ID: 1035
+
+---
+
+## Tick and Lot Size
+
+Both Price (px) and Size (sz) have a maximum number of decimals that are accepted.
+
+* **Prices** can have up to 5 significant figures, but no more than MAX\_DECIMALS - szDecimals decimal places where MAX\_DECIMALS is 6 for perps and 8 for spot.
+* Integer prices are always allowed, regardless of the number of significant figures.
+
+  * *E.g. 123456 is a valid price even though 12345.6 is not.*
+* **Sizes** are rounded to the szDecimals of that asset.
+
+  * *For example, if szDecimals = 3 then 1.001 is a valid size but 1.0001 is not.*
+  * szDecimals for an asset is found in the meta response to the info endpoint.
+
+### Perp price examples
+
+* 1234.5 is valid but 1234.56 is not (too many significant figures)
+* 0.001234 is valid, but 0.0012345 is not (more than 6 decimal places)
+* If szDecimals = 1, 0.01234 is valid but 0.012345 is not (more than 6 - szDecimals decimal places)
+
+### Spot price examples
+
+* 0.0001234 is valid if szDecimals is 0 or 1, but not if szDecimals is greater than 2 (more than 8-2 decimal places).
+
+### Signing
+
+*Note that if implementing signing, trailing zeroes should be removed. See Signing\* for more details.*
+**Signing\***: [For Developers > API > Signing](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/signing)
+
+---
+
+## Nonces and API Wallets
+
+### Background
+
+A decentralized L1 must prevent replay attacks. When a user signs a USDC transfer transaction, the receiver cannot broadcast it multiple times to drain the sender's wallet. To solve this, Ethereum stores a "nonce" for each address, which is a number that starts at 0. Each transaction must use exactly "nonce + 1" to be included.
+
+### API wallets
+
+These are also known as agent wallets in the docs.
+A master account can approve API wallets to sign on behalf of the master account or any of the sub-accounts.
+
+* **Note:** API wallets are only used to sign. To query the account data associated with a master or sub-account, you must pass in the actual address of that account.
+* *A common pitfall is to use the agent wallet which leads to an empty result.*
+
+### API wallet pruning
+
+API wallets and their associated nonce state may be pruned in the following cases:
+
+1. The wallet is deregistered. This happens to an existing unnamed API Wallet when an ApproveAgent action is sent to register a new unnamed API Wallet. This also happens to an existing named API Wallet when an ApproveAgent action is sent with a matching name.
+2. The wallet expires.
+3. The account that registered the agent no longer has funds.
+
+**Important:** For those using API wallets programmatically, it is strongly suggested to **not reuse their addresses**. Once an agent is deregistered, its used nonce state may be pruned. Generate a new agent wallet on future use to avoid unexpected behavior.
+*For example, previously signed actions can be replayed once the nonce set is pruned.*
+
+### Hyperliquid nonces
+
+Ethereum's design does not work for an onchain order book.
+A market making strategy can send thousands of orders and cancels in a second. Requiring a precise ordering of inclusion on the blockchain will break any strategy.
+
+On Hyperliquid, **the 100 highest nonces are stored per address**.
+Every new transaction must have nonce larger than the smallest nonce in this set and also never have been used before. Nonces are tracked per signer, which is the user address if signed with private key of the address, or the agent address if signed with an API wallet.
+
+* Nonces must be within *(T - 2 days, T + 1 day)*, where T is the unix millisecond timestamp on the block of the transaction.
+
+#### The following steps may help port over an automated strategy from a centralized exchange:
+
+1. Use a API wallet per trading process. Note that nonces are stored per signer (i.e. private key), so separate subaccounts signed by the same API wallet will share the nonce tracker of the API wallet. It's recommended to use separate API wallets for different subaccounts.
+2. In each trading process, have a task that periodically batches order and cancel requests every 0.1 seconds. It is recommended to batch IOC and GTC orders separately from ALO orders because ALO order-only batches are prioritized by the validators.
+3. The trading logic tasks send orders and cancels to the batching task.
+4. For each batch of orders or cancels, fetch and increment an atomic counter that ensures a unique nonce for the address. The atomic counter can be fast-forwarded to current unix milliseconds if needed.
+
+This structure is robust to out-of-order transactions within 2 seconds, which should be sufficient for an automated strategy geographically near an API server.
+
+### Suggestions for subaccount and vault users
+
+Note that nonces are stored per signer, which is the address of the private key used to sign the transaction.
+Therefore, it's recommended that each trading process or frontend session use a separate private key for signing.
+In particular, a single API wallet signing for a user, vault, or subaccount all share the same nonce set.
+
+If users want to use multiple subaccounts in parallel, it would easier to generate two separate API wallets under the master account, and use one API wallet for each subaccount.
+This avoids collisions between the nonce set used by each subaccount.
+
+------------------------------------------------
+
+# FOR DEVELOPERS
+
+## API
+
+### Info Endpoint
+
+The info endpoint is used to fetch information about the exchange and specific users. The different request bodies result in different corresponding response body schemas.
+
+#### Pagination
+
+Responses that take a time range will only return 500 elements or distinct blocks of data. To query larger ranges, use the last returned timestamp as the next startTime for pagination.
+
+#### Perpetuals vs Spot
+
+The endpoints in this section as well as websocket subscriptions work for both Perpetuals and Spot. For perpetuals, `coin` is the name returned in the meta response.
+For Spot, coin should be `PURR/USDC` for PURR, and `@{index}` e.g. `@1` for all other spot tokens where `index` is the index of the spot pair in the universe field of the spotMeta response.
+
+* Example: the spot index for HYPE on mainnet is `@107` because the token index of HYPE is 150 and the spot pair @107 has tokens \[150, 0].
+* Note that some assets may be remapped on user interfaces. For example, BTC/USDC on app.hyperliquid.xyz corresponds to UBTC/USDC on mainnet HyperCore.
+* The L1 name on the token details page can be used to detect remappings.
+
+#### User address
+
+To query the account data associated with a master or sub-account, you must pass in the actual address of that account.
+A common pitfall is to use an agent wallet's address which leads to an empty result.
+
+-----------------------------------------------------------------------------
+
+## Retrieve mids for all coins
+
+**POST** [https://api.hyperliquid.xyz/info](https://api.hyperliquid.xyz/info)
+
+*Note: If the book is empty, the last trade price will be used as a fallback.*
+
+---
+
+### Headers
+
+```
+Name,Type,Description
+Content-Type,String,"application/json"
+```
+
+---
+
+### Request Body
+
+```
+Name,Type,Description
+type*,String,"""allMids"""
+dex,String,"Perp dex name. Defaults to the empty string which represents the first perp dex. Spot mids are only included with the first perp dex."
+```
+
+---
+
+### Response
+
+**HTTP 200: OK — Successful Response Example**
+
+```json
+{
+    "APE": "4.33245",
+    "ARB": "1.21695"
+}
+```
+
+---
+
+### Doc Reference Context
+
+* **Pagination:** Responses that take a time range will only return 500 elements or distinct blocks of data. To query larger ranges, use the last returned timestamp as the next `startTime` for pagination.
+* **Perpetuals vs Spot:** The endpoints in this section as well as websocket subscriptions work for both Perpetuals and Spot. For perpetuals, `coin` is the name returned in the meta response. For Spot, `coin` should be `PURR/USDC` for PURR, and `@{index}` (e.g., `@1`) for all other spot tokens where `index` is the index of the spot pair in the universe field of the spotMeta response.
+  Example: The spot index for HYPE on mainnet is `@107` because the token index of HYPE is 150 and the spot pair @107 has tokens \[150, 0].
+  *Some assets may be remapped on user interfaces (e.g., BTC/USDC on app.hyperliquid.xyz = UBTC/USDC on mainnet HyperCore). The L1 name on the token details page can be used to detect remappings.*
+* **User Address:** To query the account data associated with a master or sub-account, you must pass in the actual address of that account.
+  *A common pitfall is to use an agent wallet's address which leads to an empty result.*
+
+-------------------------------------------------------------
+
+## Retrieve a User's Open Orders
+
+**POST** [https://api.hyperliquid.xyz/info](https://api.hyperliquid.xyz/info)
+
+---
+
+### Headers (CSV)
+
+```
+Name,Type,Description
+Content-Type,String,"application/json"
+```
+
+---
+
+### Request Body (CSV)
+
+```
+Name,Type,Description
+type*,String,"""openOrders"""
+user*,String,"Address in 42-character hexadecimal format; e.g. 0x0000000000000000000000000000000000000000."
+dex,String,"Perp dex name. Defaults to the empty string which represents the first perp dex. Spot open orders are only included with the first perp dex."
+```
+
+---
+
+### Response Example
+
+```json
+[
+    {
+        "coin": "BTC",
+        "limitPx": "29792.0",
+        "oid": 91490942,
+        "side": "A",
+        "sz": "0.0",
+        "timestamp": 1681247412573
+    }
+]
+```
+
+---
+
+## Retrieve a User's Open Orders (with Additional Frontend Info)
+
+**POST** [https://api.hyperliquid.xyz/info](https://api.hyperliquid.xyz/info)
+
+---
+
+### Headers (CSV)
+
+```
+Name,Type,Description
+Content-Type,String,"application/json"
+```
+
+---
+
+### Request Body (CSV)
+
+```
+Name,Type,Description
+type*,String,"""frontendOpenOrders"""
+user*,String,"Address in 42-character hexadecimal format; e.g. 0x0000000000000000000000000000000000000000."
+dex,String,"Perp dex name. Defaults to the empty string which represents the first perp dex. Spot open orders are only included with the first perp dex."
+```
+
+---
+
+### Response Example
+
+```json
+[
+    {
+        "coin": "BTC",
+        "isPositionTpsl": false,
+        "isTrigger": false,
+        "limitPx": "29792.0",
+        "oid": 91490942,
+        "orderType": "Limit",
+        "origSz": "5.0",
+        "reduceOnly": false,
+        "side": "A",
+        "sz": "5.0",
+        "timestamp": 1681247412573,
+        "triggerCondition": "N/A",
+        "triggerPx": "0.0"
+    }
+]
+```
+
+---
+
+## Retrieve a User's Fills
+
+**POST** [https://api.hyperliquid.xyz/info](https://api.hyperliquid.xyz/info)
+
+*Returns at most 2000 most recent fills.*
+
+---
+
+### Headers (CSV)
+
+```
+Name,Type,Description
+Content-Type,String,"application/json"
+```
+
+---
+
+### Request Body (CSV)
+
+```
+Name,Type,Description
+type*,String,"""userFills"""
+user*,String,"Address in 42-character hexadecimal format; e.g. 0x0000000000000000000000000000000000000000."
+aggregateByTime,bool,"When true, partial fills are combined when a crossing order gets filled by multiple different resting orders. Resting orders filled by multiple crossing orders will not be aggregated."
+```
+
+---
+
+### Response Example
+
+```json
+[
+    // Perp fill
+    {
+        "closedPnl": "0.0",
+        "coin": "AVAX",
+        "crossed": false,
+        "dir": "Open Long",
+        "hash": "0xa166e3fa63c25663024b03f2e0da011a00307e4017465df020210d3d432e7cb8",
+        "oid": 90542681,
+        "px": "18.435",
+        "side": "B",
+        "startPosition": "26.86",
+        "sz": "93.53",
+        "time": 1681222254710,
+        "fee": "0.01",
+        "feeToken": "USDC",
+        "builderFee": "0.01",
+        "tid": 118906512037719
+    },
+    // Spot fill
+    {
+        "coin": "@107",
+        "px": "18.62041381",
+        "sz": "43.84",
+        "side": "A",
+        "time": 1735969713869,
+        "startPosition": "10659.65434798",
+        "dir": "Sell",
+        "closedPnl": "8722.988077",
+        "hash": "0x2222138cc516e3fe746c0411dd733f02e60086f43205af2ae37c93f6a792430b",
+        "oid": 59071663721,
+        "crossed": true,
+        "fee": "0.304521",
+        "tid": 907359904431134,
+        "feeToken": "USDC"
+    }
+]
+```
+
+*Note: For more information on spot asset IDs, see [asset-ids](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/asset-ids).*
+
+---
+
+## Retrieve a User's Fills by Time
+
+**POST** [https://api.hyperliquid.xyz/info](https://api.hyperliquid.xyz/info)
+
+*Returns at most 2000 fills per response and only the 10,000 most recent fills are available.*
+
+---
+
+### Headers (CSV)
+
+```
+Name,Type,Description
+Content-Type,String,"application/json"
+```
+
+---
+
+### Request Body (CSV)
+
+```
+Name,Type,Description
+type*,String,"userFillsByTime"
+user*,String,"Address in 42-character hexadecimal format; e.g. 0x0000000000000000000000000000000000000000."
+startTime*,int,"Start time in milliseconds, inclusive"
+endTime,int,"End time in milliseconds, inclusive. Defaults to current time."
+aggregateByTime,bool,"When true, partial fills are combined when a crossing order gets filled by multiple different resting orders. Resting orders filled by multiple crossing orders will not be aggregated."
+```
+
+---
+
+### Response Example
+
+*Same as above for `userFills`.*
+
+-----------------------------------------------------------------------
+
+## Candle Snapshot
+
+**POST** [https://api.hyperliquid.xyz/info](https://api.hyperliquid.xyz/info)
+
+---
+
+### Headers (CSV)
+
+```
+Name,Value
+Content-Type*,"application/json"
+```
+
+---
+
+### Body (Request Body as CSV)
+
+```
+Name,Type,Description
+type*,String,"candleSnapshot"
+req*,Object,"{""coin"": <coin>, ""interval"": ""15m"", ""startTime"": <epoch millis>, ""endTime"": <epoch millis>}"
+```
+
+---
+
+### Response Example
+
+```json
+[
+  {
+    "T": 1681924499999,
+    "c": "29258.0",
+    "h": "29309.0",
+    "i": "15m",
+    "l": "29250.0",
+    "n": 189,
+    "o": "29295.0",
+    "s": "BTC",
+    "t": 1681923600000,
+    "v": "0.98639"
+  }
+]
+```
+
+---
+
+## Check Builder Fee Approval
+
+**POST** [https://api.hyperliquid.xyz/info](https://api.hyperliquid.xyz/info)
+
+---
+
+### Headers (CSV)
+
+```
+Name,Value
+Content-Type*,"application/json"
+```
+
+---
+
+### Body (Request Body as CSV)
+
+```
+Name,Type,Description
+type*,String,"maxBuilderFee"
+user*,String,"Address in 42-character hexadecimal format; e.g. 0x0000000000000000000000000000000000000000."
+builder*,String,"Address in 42-character hexadecimal format; e.g. 0x0000000000000000000000000000000000000000."
+```
+
+---
+
+### Response Example
+
+```
+1 // maximum fee approved in tenths of a basis point i.e. 1 means 0.001%
+```
+
+---
+
+## Retrieve a User's Historical Orders
+
+**POST** [https://api.hyperliquid.xyz/info](https://api.hyperliquid.xyz/info)
+*Returns at most 2000 most recent historical orders.*
+
+---
+
+### Headers (CSV)
+
+```
+Name,Type,Description
+Content-Type*,String,"application/json"
+```
+
+---
+
+### Request Body (CSV)
+
+```
+Name,Type,Description
+type*,String,"historicalOrders"
+user*,String,"Address in 42-character hexadecimal format; e.g. 0x0000000000000000000000000000000000000000."
+```
+
+---
+
+### Response Example
+
+```json
+[
+  {
+    "order": {
+      "coin": "ETH",
+      "side": "A",
+      "limitPx": "2412.7",
+      "sz": "0.0",
+      "oid": 1,
+      "timestamp": 1724361546645,
+      "triggerCondition": "N/A",
+      "isTrigger": false,
+      "triggerPx": "0.0",
+      "children": [],
+      "isPositionTpsl": false,
+      "reduceOnly": true,
+      "orderType": "Market",
+      "origSz": "0.0076",
+      "tif": "FrontendMarket",
+      "cloid": null
+    },
+    "status": "filled" | "open" | "canceled" | "triggered" | "rejected" | "marginCanceled",
+    "statusTimestamp": 1724361546645
+  }
+]
+```
+
+---
+
+## Retrieve a User's TWAP Slice Fills
+
+**POST** [https://api.hyperliquid.xyz/info](https://api.hyperliquid.xyz/info)
+*Returns at most 2000 most recent TWAP slice fills.*
+
+---
+
+### Headers (CSV)
+
+```
+Name,Type,Description
+Content-Type*,String,"application/json"
+```
+
+---
+
+### Request Body (CSV)
+
+```
+Name,Type,Description
+type*,String,"userTwapSliceFills"
+user*,String,"Address in 42-character hexadecimal format; e.g. 0x0000000000000000000000000000000000000000."
+```
+
+---
+
+### Response Example
+
+```json
+[
+    {
+        "fill": {
+            "closedPnl": "0.0",
+            "coin": "AVAX",
+            "crossed": true,
+            "dir": "Open Long",
+            "hash": "0x0000000000000000000000000000000000000000000000000000000000000000", // TWAP fills have a hash of 0
+            "oid": 90542681,
+            "px": "18.435",
+            "side": "B",
+            "startPosition": "26.86",
+            "sz": "93.53",
+            "time": 1681222254710,
+            "fee": "0.01",
+            "feeToken": "USDC",
+            "tid": 118906512037719
+        },
+        "twapId": 3156
+    }
+]
+```
+-----------------------------------------------------------------------------
+
+## Query a User's Fees
+
+**POST** [https://api.hyperliquid.xyz/info](https://api.hyperliquid.xyz/info)
+
+---
+
+### Headers (CSV)
+
+```
+Name,Type,Description
+Content-Type*,String,"application/json"
+```
+
+---
+
+### Request Body (CSV)
+
+```
+Name,Type,Description
+type*,String,"userFees"
+user*,String,"hexadecimal format; e.g. 0x0000000000000000000000000000000000000000."
+```
+
+---
+
+### Response Example
+
+```json
+{
+  "dailyUserVlm": [
+    {
+      "date": "2025-05-23",
+      "userCross": "0.0",
+      "userAdd": "0.0",
+      "exchange": "2852367.0770729999"
+    }
+    // ...
+  ],
+  "feeSchedule": {
+    "cross": "0.00045",
+    "add": "0.00015",
+    "spotCross": "0.0007",
+    "spotAdd": "0.0004",
+    "tiers": {
+      "vip": [
+        {
+          "ntlCutoff": "5000000.0",
+          "cross": "0.0004",
+          "add": "0.00012",
+          "spotCross": "0.0006",
+          "spotAdd": "0.0003"
+        }
+        // ...
+      ],
+      "mm": [
+        {
+          "makerFractionCutoff": "0.005",
+          "add": "-0.00001"
+        }
+        // ...
+      ]
+    },
+    "referralDiscount": "0.04",
+    "stakingDiscountTiers": [
+      {
+        "bpsOfMaxSupply": "0.0",
+        "discount": "0.0"
+      },
+      {
+        "bpsOfMaxSupply": "0.0001",
+        "discount": "0.05"
+      }
+      // ...
+    ]
+  },
+  "userCrossRate": "0.000315",
+  "userAddRate": "0.000105",
+  "userSpotCrossRate": "0.00049",
+  "userSpotAddRate": "0.00028",
+  "activeReferralDiscount": "0.0",
+  "trial": null,
+  "feeTrialReward": "0.0",
+  "nextTrialAvailableTimestamp": null,
+  "stakingLink": {
+    "type": "tradingUser",
+    "stakingUser": "0x54c049d9c7d3c92c2462bf3d28e083f3d6805061"
+  },
+  "activeStakingDiscount": {
+    "bpsOfMaxSupply": "4.7577998927",
+    "discount": "0.3"
+  }
+}
+```
+
+---
+
+## Query a User's Staking Delegations
+
+**POST** [https://api.hyperliquid.xyz/info](https://api.hyperliquid.xyz/info)
+
+---
+
+### Headers (CSV)
+
+```
+Name,Type,Description
+Content-Type*,String,"application/json"
+```
+
+---
+
+### Request Body (CSV)
+
+```
+Name,Type,Description
+type*,String,"delegations"
+user*,String,"hexadecimal format; e.g. 0x0000000000000000000000000000000000000000."
+```
+
+---
+
+### Response Example
+
+```json
+[
+    {
+        "validator": "0x5ac99df645f3414876c816caa18b2d234024b487",
+        "amount": "12060.16529862",
+        "lockedUntilTimestamp": 1735466781353
+    }
+    // ...
+]
+```
+
+---
+
+## Query a User's Staking Summary
+
+**POST** [https://api.hyperliquid.xyz/info](https://api.hyperliquid.xyz/info)
+
+---
+
+### Headers (CSV)
+
+```
+Name,Type,Description
+Content-Type*,String,"application/json"
+```
+
+---
+
+### Request Body (CSV)
+
+```
+Name,Type,Description
+type*,String,"delegatorSummary"
+user*,String,"hexadecimal format; e.g. 0x0000000000000000000000000000000000000000."
+```
+
+---
+
+### Response Example
+
+```json
+{
+    "delegated": "12060.16529862",
+    "undelegated": "0.0",
+    "totalPendingWithdrawal": "0.0",
+    "nPendingWithdrawals": 0
+}
+```
+
+---
+
+## Query a User's Staking History
+
+**POST** [https://api.hyperliquid.xyz/info](https://api.hyperliquid.xyz/info)
+
+---
+
+### Headers (CSV)
+
+```
+Name,Type,Description
+Content-Type*,String,"application/json"
+```
+
+---
+
+### Request Body (CSV)
+
+```
+Name,Type,Description
+type*,String,"delegatorHistory"
+user*,String,"hexadecimal format; e.g. 0x0000000000000000000000000000000000000000."
+```
+
+---
+
+### Response Example
+
+```json
+[
+    {
+        "time": 1735380381353,
+        "hash": "0x55492465cb523f90815a041a226ba90147008d4b221a24ae8dc35a0dbede4ea4",
+        "delta": {
+            "delegate": {
+                "validator": "0x5ac99df645f3414876c816caa18b2d234024b487",
+                "amount": "10000.0",
+                "isUndelegate": false
+            }
+        }
+    }
+    // ...
+]
+```
+
+---
+
+## Query a User's Staking Rewards
+
+**POST** [https://api.hyperliquid.xyz/info](https://api.hyperliquid.xyz/info)
+
+---
+
+### Headers (CSV)
+
+```
+Name,Type,Description
+Content-Type*,String,"application/json"
+```
+
+---
+
+### Request Body (CSV)
+
+```
+Name,Type,Description
+type*,String,"delegatorRewards"
+user*,String,"hexadecimal format; e.g. 0x0000000000000000000000000000000000000000."
+```
+
+---
+
+### Response Example
+
+```json
+[
+    {
+        "time": 1736726400073,
+        "source": "delegation",
+        "totalAmount": "0.73117184"
+    },
+    {
+        "time": 1736726400073,
+        "source": "commission",
+        "totalAmount": "130.76445876"
+    }
+    // ...
+]
+```
+
+----------------------------------------------------------------------------------
+
+# For Developers
+
+## API
+
+### Info Endpoint — Perpetuals
+
+The section documents the info endpoints that are specific to perpetuals. See Rate limits section for rate limiting logic and weights.
+
+---
+
+## Retrieve All Perpetual Dexs
+
+**POST** [https://api.hyperliquid.xyz/info](https://api.hyperliquid.xyz/info)
+
+### Headers (CSV)
+
+```
+Name,Type,Description
+Content-Type*,String,"application/json"
+```
+
+### Request Body (CSV)
+
+```
+Name,Type,Description
+type*,String,"perpDexs"
+```
+
+### Response Example
+
+```json
+[
+  null,
+  {
+    "name": "test",
+    "full_name": "test dex",
+    "deployer": "0x5e89b26d8d66da9888c835c9bfcc2aa51813e152",
+    "oracle_updater": null
+  }
+]
+```
+
+---
+
+## Retrieve Perpetuals Metadata (Universe and Margin Tables)
+
+**POST** [https://api.hyperliquid.xyz/info](https://api.hyperliquid.xyz/info)
+
+### Headers (CSV)
+
+```
+Name,Type,Description
+Content-Type*,String,"application/json"
+```
+
+### Request Body (CSV)
+
+```
+Name,Type,Description
+type*,String,"meta"
+dex,String,"Perp dex name. Defaults to the empty string which represents the first perp dex."
+```
+
+### Response Example
+
+```json
+{
+    "universe": [
+        {
+            "name": "BTC",
+            "szDecimals": 5,
+            "maxLeverage": 50
+        },
+        {
+            "name": "ETH",
+            "szDecimals": 4,
+            "maxLeverage": 50
+        },
+        {
+            "name": "HPOS",
+            "szDecimals": 0,
+            "maxLeverage": 3,
+            "onlyIsolated": true
+        },
+        {
+            "name": "LOOM",
+            "szDecimals": 1,
+            "maxLeverage": 3,
+            "onlyIsolated": true,
+            "isDelisted": true
+        }
+    ],
+    "marginTables": [
+        [
+            50,
+            {
+                "description": "",
+                "marginTiers": [
+                    {
+                        "lowerBound": "0.0",
+                        "maxLeverage": 50
+                    }
+                ]
+            }
+        ],
+        [
+            51,
+            {
+                "description": "tiered 10x",
+                "marginTiers": [
+                    {
+                        "lowerBound": "0.0",
+                        "maxLeverage": 10
+                    },
+                    {
+                        "lowerBound": "3000000.0",
+                        "maxLeverage": 5
+                    }
+                ]
+            }
+        ]
+    ]
+}
+```
+
+---
+
+## Retrieve Perpetuals Asset Contexts
+
+*(Includes mark price, current funding, open interest, etc.)*
+
+**POST** [https://api.hyperliquid.xyz/info](https://api.hyperliquid.xyz/info)
+
+### Headers (CSV)
+
+```
+Name,Type,Description
+Content-Type*,String,"application/json"
+```
+
+### Request Body (CSV)
+
+```
+Name,Type,Description
+type*,String,"metaAndAssetCtxs"
+```
+
+### Response Example
+
+```json
+[
+  {
+    "universe": [
+      {"name": "BTC", "szDecimals": 5, "maxLeverage": 50},
+      {"name": "ETH", "szDecimals": 4, "maxLeverage": 50},
+      {"name": "HPOS", "szDecimals": 0, "maxLeverage": 3, "onlyIsolated": true}
+    ]
+  },
+  [
+    {
+      "dayNtlVlm":"1169046.29406",
+      "funding":"0.0000125",
+      "impactPxs":["14.3047","14.3444"],
+      "markPx":"14.3161",
+      "midPx":"14.314",
+      "openInterest":"688.11",
+      "oraclePx":"14.32",
+      "premium":"0.00031774",
+      "prevDayPx":"15.322"
+    },
+    {
+      "dayNtlVlm":"1426126.295175",
+      "funding":"0.0000125",
+      "impactPxs":["6.0386","6.0562"],
+      "markPx":"6.0436",
+      "midPx":"6.0431",
+      "openInterest":"1882.55",
+      "oraclePx":"6.0457",
+      "premium":"0.00028119",
+      "prevDayPx":"6.3611"
+    },
+    {
+      "dayNtlVlm":"809774.565507",
+      "funding":"0.0000125",
+      "impactPxs":["8.4505","8.4722"],
+      "markPx":"8.4542",
+      "midPx":"8.4557",
+      "openInterest":"2912.05",
+      "oraclePx":"8.4585",
+      "premium":"0.00033694",
+      "prevDayPx":"8.8097"
+    }
+  ]
+]
+```
+
+---
+
+## Retrieve User’s Perpetuals Account Summary
+
+**POST** [https://api.hyperliquid.xyz/info](https://api.hyperliquid.xyz/info)
+
+### Headers (CSV)
+
+```
+Name,Type,Description
+Content-Type*,"application/json"
+```
+
+### Request Body (CSV)
+
+```
+Name,Type,Description
+type*,String,"clearinghouseState"
+user*,String,"Onchain address in 42-character hexadecimal format; e.g. 0x0000000000000000000000000000000000000000."
+dex,String,"Perp dex name. Defaults to the empty string which represents the first perp dex."
+```
+
+### Response Example
+
+```json
+{
+  "assetPositions": [
+    {
+      "position": {
+        "coin": "ETH",
+        "cumFunding": {
+          "allTime": "514.085417",
+          "sinceChange": "0.0",
+          "sinceOpen": "0.0"
+        },
+        "entryPx": "2986.3",
+        "leverage": {
+          "rawUsd": "-95.059824",
+          "type": "isolated",
+          "value": 20
+        },
+        "liquidationPx": "2866.26936529",
+        "marginUsed": "4.967826",
+        "maxLeverage": 50,
+        "positionValue": "100.02765",
+        "returnOnEquity": "-0.0026789",
+        "szi": "0.0335",
+        "unrealizedPnl": "-0.0134"
+      },
+      "type": "oneWay"
+    }
+  ],
+  "crossMaintenanceMarginUsed": "0.0",
+  "crossMarginSummary": {
+    "accountValue": "13104.514502",
+    "totalMarginUsed": "0.0",
+    "totalNtlPos": "0.0",
+    "totalRawUsd": "13104.514502"
+  },
+  "marginSummary": {
+    "accountValue": "13109.482328",
+    "totalMarginUsed": "4.967826",
+    "totalNtlPos": "100.02765",
+    "totalRawUsd": "13009.454678"
+  },
+  "time": 1708622398623,
+  "withdrawable": "13104.514502"
+}
+```
+
+---
+
+## Retrieve a User’s Funding History or Non-Funding Ledger Updates
+
+**POST** [https://api.hyperliquid.xyz/info](https://api.hyperliquid.xyz/info)
+*Non-funding ledger updates include deposits, transfers, and withdrawals.*
+
+### Headers (CSV)
+
+```
+Name,Type,Description
+Content-Type*,"application/json"
+```
+
+### Request Body (CSV)
+
+```
+Name,Type,Description
+type*,String,"userFunding" or "userNonFundingLedgerUpdates"
+user*,String,"Address in 42-character hexadecimal format; e.g. 0x0000000000000000000000000000000000000000."
+startTime*,int,"Start time in milliseconds, inclusive"
+endTime,int,"End time in milliseconds, inclusive. Defaults to current time."
+```
+
+### Response Example
+
+```json
+[
+    {
+        "delta": {
+            "coin":"ETH",
+            "fundingRate":"0.0000417",
+            "szi":"49.1477",
+            "type":"funding",
+            "usdc":"-3.625312"
+        },
+        "hash":"0xa166e3fa63c25663024b03f2e0da011a00307e4017465df020210d3d432e7cb8",
+        "time":1681222254710
+    }
+    // ...
+]
+```
+
+---
+
+## Retrieve Historical Funding Rates
+
+**POST** [https://api.hyperliquid.xyz/info](https://api.hyperliquid.xyz/info)
+
+### Headers (CSV)
+
+```
+Name,Type,Description
+Content-Type*,"application/json"
+```
+
+### Request Body (CSV)
+
+```
+Name,Type,Description
+type*,String,"fundingHistory"
+coin*,String,"Coin, e.g. ""ETH"""
+startTime*,int,"Start time in milliseconds, inclusive"
+endTime,int,"End time in milliseconds, inclusive. Defaults to current time."
+```
+
+### Response Example
+
+```json
+[
+    {
+        "coin":"ETH",
+        "fundingRate": "-0.00022196",
+        "premium": "-0.00052196",
+        "time":1683849600076
+    }
+]
+```
+
+---
+
+## Retrieve Predicted Funding Rates for Different Venues
+
+**POST** [https://api.hyperliquid.xyz/info](https://api.hyperliquid.xyz/info)
+
+### Headers (CSV)
+
+```
+Name,Type,Description
+Content-Type*,"application/json"
+```
+
+### Request Body (CSV)
+
+```
+Name,Type,Description
+type*,String,"predictedFundings"
+```
+
+### Response Example
+
+```json
+[
+  [
+    "AVAX",
+    [
+      [
+        "BinPerp",
+        {
+          "fundingRate": "0.0001",
+          "nextFundingTime": 1733961600000
+        }
+      ],
+      [
+        "HlPerp",
+        {
+          "fundingRate": "0.0000125",
+          "nextFundingTime": 1733958000000
+        }
+      ],
+      [
+        "BybitPerp",
+        {
+          "fundingRate": "0.0001",
+          "nextFundingTime": 1733961600000
+        }
+      ]
+    ]
+  ]
+  // ...
+]
+```
+
+---
+
+## Query Perps at Open Interest Caps
+
+**POST** [https://api.hyperliquid.xyz/info](https://api.hyperliquid.xyz/info)
+
+### Headers (CSV)
+
+```
+Name,Type,Description
+Content-Type*,"application/json"
+```
+
+### Request Body (CSV)
+
+```
+Name,Type,Description
+type*,String,"perpsAtOpenInterestCap"
+```
+
+### Response Example
+
+```json
+["BADGER","CANTO","FTM","LOOM","PURR"]
+```
+
+---
+
+## Retrieve Info About the Perp Deploy Auction
+
+**POST** [https://api.hyperliquid.xyz/info](https://api.hyperliquid.xyz/info)
+
+### Headers (CSV)
+
+```
+Name,Type,Description
+Content-Type*,"application/json"
+```
+
+### Request Body (CSV)
+
+```
+Name,Type,Description
+type*,String,"perpDeployAuctionStatus"
+```
+
+### Response Example
+
+```json
+{
+  "startTimeSeconds": 1747656000,
+  "durationSeconds": 111600,
+  "startGas": "500.0",
+  "currentGas": "500.0",
+  "endGas": null
+}
+```
+
+-------------------------------------------------------------------
+
+# For Developers
+
+## API
+
+### Info Endpoint — Spot
+
+The section documents the info endpoints that are specific to spot.
+
+---
+
+## Retrieve Spot Metadata
+
+**POST** [https://api.hyperliquid.xyz/info](https://api.hyperliquid.xyz/info)
+
+### Headers (CSV)
+
+```
+Name,Value
+Content-Type*,"application/json"
+```
+
+### Body (CSV)
+
+```
+Name,Type,Description
+type*,String,"spotMeta"
+```
+
+### Response Example
+
+```json
+{
+    "tokens": [
+        {
+            "name": "USDC",
+            "szDecimals": 8,
+            "weiDecimals": 8,
+            "index": 0,
+            "tokenId": "0x6d1e7cde53ba9467b783cb7c530ce054",
+            "isCanonical": true,
+            "evmContract":null,
+            "fullName":null
+        },
+        {
+            "name": "PURR",
+            "szDecimals": 0,
+            "weiDecimals": 5,
+            "index": 1,
+            "tokenId": "0xc1fb593aeffbeb02f85e0308e9956a90",
+            "isCanonical": true,
+            "evmContract":null,
+            "fullName":null
+        },
+        {
+            "name": "HFUN",
+            "szDecimals": 2,
+            "weiDecimals": 8,
+            "index": 2,
+            "tokenId": "0xbaf265ef389da684513d98d68edf4eae",
+            "isCanonical": false,
+            "evmContract":null,
+            "fullName":null
+        }
+    ],
+    "universe": [
+        {
+            "name": "PURR/USDC",
+            "tokens": [1, 0],
+            "index": 0,
+            "isCanonical": true
+        },
+        {
+            "tokens": [2, 0],
+            "name": "@1",
+            "index": 1,
+            "isCanonical": false
+        }
+    ]
+}
+```
+
+---
+
+## Retrieve Spot Asset Contexts
+
+**POST** [https://api.hyperliquid.xyz/info](https://api.hyperliquid.xyz/info)
+
+### Headers (CSV)
+
+```
+Name,Type,Description
+Content-Type*,String,"application/json"
+```
+
+### Request Body (CSV)
+
+```
+Name,Type,Description
+type*,String,"spotMetaAndAssetCtxs"
+```
+
+### Response Example
+
+```json
+[
+{
+    "tokens": [
+        {
+            "name": "USDC",
+            "szDecimals": 8,
+            "weiDecimals": 8,
+            "index": 0,
+            "tokenId": "0x6d1e7cde53ba9467b783cb7c530ce054",
+            "isCanonical": true,
+            "evmContract":null,
+            "fullName":null
+        },
+        {
+            "name": "PURR",
+            "szDecimals": 0,
+            "weiDecimals": 5,
+            "index": 1,
+            "tokenId": "0xc1fb593aeffbeb02f85e0308e9956a90",
+            "isCanonical": true,
+            "evmContract":null,
+            "fullName":null
+        }
+    ],
+    "universe": [
+        {
+            "name": "PURR/USDC",
+            "tokens": [1, 0],
+            "index": 0,
+            "isCanonical": true
+        }
+    ]
+},
+[
+    {
+        "dayNtlVlm":"8906.0",
+        "markPx":"0.14",
+        "midPx":"0.209265",
+        "prevDayPx":"0.20432"
+    }
+]
+]
+```
+
+---
+
+## Retrieve a User's Token Balances
+
+**POST** [https://api.hyperliquid.xyz/info](https://api.hyperliquid.xyz/info)
+See a user's token balances
+
+### Headers (CSV)
+
+```
+Name,Type,Description
+Content-Type*,"application/json"
+```
+
+### Request Body (CSV)
+
+```
+Name,Type,Description
+type*,String,"spotClearinghouseState"
+user*,String,"Onchain address in 42-character hexadecimal format; e.g. 0x0000000000000000000000000000000000000000."
+```
+
+### Response Example
+
+```json
+{
+    "balances": [
+        {
+            "coin": "USDC",
+            "token": 0,
+            "hold": "0.0",
+            "total": "14.625485",
+            "entryNtl": "0.0"
+        },
+        {
+            "coin": "PURR",
+            "token": 1,
+            "hold": "0",
+            "total": "2000",
+            "entryNtl": "1234.56"
+        }
+    ]
+}
+```
+
+---
+
+## Retrieve Information About the Spot Deploy Auction
+
+**POST** [https://api.hyperliquid.xyz/info](https://api.hyperliquid.xyz/info)
+
+### Headers (CSV)
+
+```
+Name,Value
+Content-Type*,"application/json"
+```
+
+### Body (CSV)
+
+```
+Name,Type,Description
+type*,String,"spotDeployState"
+user*,String,"Onchain address in 42-character hexadecimal format; e.g. 0x0000000000000000000000000000000000000000."
+```
+
+### Response Example
+
+```json
+{
+  "states": [
+    {
+      "token": 150,
+      "spec" : {
+        "name": "HYPE",
+        "szDecimals": 2,
+        "weiDecimals": 8
+      },
+      "fullName": "Hyperliquid",
+      "spots": [107],
+      "maxSupply": 1000000000,
+      "hyperliquidityGenesisBalance": "120000",
+      "totalGenesisBalanceWei": "100000000000000000",
+      "userGenesisBalances": [
+        ["0xdddddddddddddddddddddddddddddddddddddddd", "428,062,211"]
+        // ...
+      ],
+      "existingTokenGenesisBalances": [
+        [1, "0"]
+        // ...
+      ]
+    }
+  ],
+  "gasAuction": {
+    "startTimeSeconds": 1733929200,
+    "durationSeconds": 111600,
+    "startGas": "181305.90046",
+    "currentGas": null,
+    "endGas": "181291.247358"
+  }
+}
+```
+
+---
+
+## Retrieve Information About a Token
+
+**POST** [https://api.hyperliquid.xyz/info](https://api.hyperliquid.xyz/info)
+
+### Headers (CSV)
+
+```
+Name,Value
+Content-Type*,"application/json"
+```
+
+### Body (CSV)
+
+```
+Name,Type,Description
+type*,String,"tokenDetails"
+tokenId*,String,"Onchain id in 34-character hexadecimal format; e.g. 0x00000000000000000000000000000000."
+```
+
+### Response Example
+
+```json
+{
+  "name": "TEST",
+  "maxSupply": "1852229076.12716007",
+  "totalSupply": "851681534.05516005",
+  "circulatingSupply": "851681534.05516005",
+  "szDecimals": 0,
+  "weiDecimals": 5,
+  "midPx": "3.2049",
+  "markPx": "3.2025",
+  "prevDayPx": "3.2025",
+  "genesis": {
+    "userBalances": [
+      [
+        "0x0000000000000000000000000000000000000001",
+        "1000000000.0"
+      ],
+      [
+        "0xffffffffffffffffffffffffffffffffffffffff",
+        "1000000000.0"
+      ]
+    ],
+    "existingTokenBalances": []
+  },
+  "deployer": "0x0000000000000000000000000000000000000001",
+  "deployGas": "100.0",
+  "deployTime": "2024-06-05T10:50:59.434",
+  "seededUsdc": "0.0",
+  "nonCirculatingUserBalances": [],
+  "futureEmissions": "0.0"
+}
+```
+
+-------------------------------------------------------------------------------
+
+# For Developers
+
+## API
+
+### Exchange Endpoint
+
+The exchange endpoint is used to interact with and trade on the Hyperliquid chain. See the Python SDK for code to generate signatures for these requests.
+
+---
+
+#### Asset
+
+Many of the requests take `asset` as an input.
+
+* **Perpetuals:** This is the index in the `universe` field returned by the meta response.
+* **Spot assets:** Use `10000 + index` where `index` is the corresponding index in `spotMeta.universe`.
+* Example: When submitting an order for PURR/USDC, the asset that should be used is 10000 because its asset index in the spot metadata is 0.
+
+#### Subaccounts and Vaults
+
+Subaccounts and vaults do not have private keys.
+To perform actions on behalf of a subaccount or vault, signing should be done by the master account and the `vaultAddress` field should be set to the address of the subaccount or vault.
+The `basic_vault.py` example in the Python SDK demonstrates this.
+
+#### Expires After
+
+Some actions support an optional field `expiresAfter` which is a timestamp in milliseconds after which the action will be rejected.
+User-signed actions such as Core USDC transfer do **not** support the `expiresAfter` field.
+*Actions consume 5x the usual address-based rate limit when canceled due to a stale `expiresAfter` field.*
+
+See the Python SDK for details on how to incorporate this field when signing.
+
+---
+
+## Place an Order
+
+**POST** [https://api.hyperliquid.xyz/exchange](https://api.hyperliquid.xyz/exchange)
+
+*See Python SDK for full-featured examples on the fields of the order request.*
+
+* For limit orders, TIF (time-in-force) sets the behavior of the order upon first hitting the book:
+
+  * **ALO** (add liquidity only, i.e. "post only"): will be canceled instead of immediately matching.
+  * **IOC** (immediate or cancel): will have the unfilled part canceled instead of resting.
+  * **GTC** (good til canceled): orders have no special behavior.
+* **Client Order ID (cloid):** optional 128-bit hex string, e.g. `0x1234567890abcdef1234567890abcdef`
+
+---
+
+### Headers (CSV)
+
+```
+Name,Type,Description
+Content-Type*,String,"application/json"
+```
+
+---
+
+### Request Body (CSV)
+
+```
+Name,Type,Description
+action*,Object,See below for schema
+nonce*,Number,"Recommended to use the current timestamp in milliseconds"
+signature*,Object,
+vaultAddress,String,"If trading on behalf of a vault or subaccount, its Onchain address in 42-character hexadecimal format; e.g. 0x0000000000000000000000000000000000000000"
+expiresAfter,Number,"Timestamp in milliseconds"
+```
+
+---
+
+#### Action Object Schema (Order Example)
+
+```json
+{
+  "type": "order",
+  "orders": [{
+    "a": Number,             // asset
+    "b": Boolean,            // isBuy
+    "p": String,             // price
+    "s": String,             // size
+    "r": Boolean,            // reduceOnly
+    "t": {                   // type
+      "limit": {
+        "tif": "Alo" | "Ioc" | "Gtc"
+      }
+      // or
+      "trigger": {
+         "isMarket": Boolean,
+         "triggerPx": String,
+         "tpsl": "tp" | "sl"
+      }
+    },
+    "c": Cloid (optional)    // client order id
+  }],
+  "grouping": "na" | "normalTpsl" | "positionTpsl",
+  "builder": Optional({"b": "address", "f": Number})  // builder fee (optional)
+}
+```
+
+**Meaning of keys:**
+
+* `a` is asset
+* `b` is isBuy
+* `p` is price
+* `s` is size
+* `r` is reduceOnly
+* `t` is type
+* `c` is cloid (client order id)
+
+**Meaning of keys in optional builder argument:**
+
+* `b` is the address to receive the additional fee
+* `f` is the fee in tenths of a basis point (e.g., 10 = 1bp of order notional charged to user and sent to builder)
+
+---
+
+### Response Example — Successful (Resting)
+
+```json
+{
+   "status":"ok",
+   "response":{
+      "type":"order",
+      "data":{
+         "statuses":[
+            {
+               "resting":{
+                  "oid":77738308
+               }
+            }
+         ]
+      }
+   }
+}
+```
+
+------------------------------------------------------------------
+
+## Cancel Order(s)
+
+**POST** [https://api.hyperliquid.xyz/exchange](https://api.hyperliquid.xyz/exchange)
+
+### Headers (CSV)
+
+```
+Name,Type,Description
+Content-Type*,String,"application/json"
+```
+
+### Request Body (CSV)
+
+```
+Name,Type,Description
+action*,Object,See schema below
+nonce*,Number,"Recommended to use the current timestamp in milliseconds"
+signature*,Object,
+vaultAddress,String,"If trading on behalf of a vault or subaccount, its address in 42-character hexadecimal format; e.g. 0x0000000000000000000000000000000000000000"
+expiresAfter,Number,"Timestamp in milliseconds"
+```
+
+#### Action Object (Cancel Example)
+
+```json
+{
+  "type": "cancel",
+  "cancels": [
+    {
+      "a": Number,  // asset
+      "o": Number   // oid (order id)
+    }
+  ]
+}
+```
+
+Meaning of keys:
+
+* a is asset
+* o is oid (order id)
+
+### Response Example
+
+```json
+{
+   "status":"ok",
+   "response":{
+      "type":"cancel",
+      "data":{
+         "statuses":[
+            "success"
+         ]
+      }
+   }
+}
+```
+
+---
+
+## Cancel Order(s) by cloid
+
+**POST** [https://api.hyperliquid.xyz/exchange](https://api.hyperliquid.xyz/exchange)
+
+### Headers (CSV)
+
+```
+Name,Type,Description
+Content-Type*,String,"application/json"
+```
+
+### Request Body (CSV)
+
+```
+Name,Type,Description
+action*,Object,See schema below
+nonce*,Number,"Recommended to use the current timestamp in milliseconds"
+signature*,Object,
+vaultAddress,String,"If trading on behalf of a vault or subaccount, its address in 42-character hexadecimal format; e.g. 0x0000000000000000000000000000000000000000"
+expiresAfter,Number,"Timestamp in milliseconds"
+```
+
+#### Action Object (Cancel by cloid Example)
+
+```json
+{
+  "type": "cancelByCloid",
+  "cancels": [
+    {
+      "asset": Number,
+      "cloid": String
+    }
+  ]
+}
+```
+
+---
+
+## Schedule Cancel (Dead Man’s Switch)
+
+**POST** [https://api.hyperliquid.xyz/exchange](https://api.hyperliquid.xyz/exchange)
+
+*Schedule a cancel-all operation at a future time. Not including time will remove the scheduled cancel operation. The time must be at least 5 seconds after the current time. Once the time comes, all open orders will be canceled and a trigger count will be incremented (max 10/day, resets at 00:00 UTC).*
+
+### Headers (CSV)
+
+```
+Name,Type,Description
+Content-Type*,String,"application/json"
+```
+
+### Request Body (CSV)
+
+```
+Name,Type,Description
+action*,Object,See schema below
+nonce*,Number,"Recommended to use the current timestamp in milliseconds"
+signature*,Object,
+vaultAddress,String,"If trading on behalf of a vault or subaccount, its address in 42-character hexadecimal format; e.g. 0x0000000000000000000000000000000000000000"
+expiresAfter,Number,"Timestamp in milliseconds"
+```
+
+#### Action Object (Schedule Cancel Example)
+
+```json
+{
+  "type": "scheduleCancel",
+  "time": number // optional
+}
+```
+
+---
+
+## Modify an Order
+
+**POST** [https://api.hyperliquid.xyz/exchange](https://api.hyperliquid.xyz/exchange)
+
+### Headers (CSV)
+
+```
+Name,Type,Description
+Content-Type*,String,"application/json"
+```
+
+### Request Body (CSV)
+
+```
+Name,Type,Description
+action*,Object,See schema below
+nonce*,Number,"Recommended to use the current timestamp in milliseconds"
+signature*,Object,
+vaultAddress,String,"If trading on behalf of a vault or subaccount, its Onchain address in 42-character hexadecimal format; e.g. 0x0000000000000000000000000000000000000000"
+expiresAfter,Number,"Timestamp in milliseconds"
+```
+
+#### Action Object (Modify Example)
+
+```json
+{
+  "type": "modify",
+  "oid": Number | Cloid,
+  "order": {
+    "a": Number,
+    "b": Boolean,
+    "p": String,
+    "s": String,
+    "r": Boolean,
+    "t": {
+      "limit": {
+        "tif": "Alo" | "Ioc" | "Gtc"
+      }
+      // or
+      "trigger": {
+         "isMarket": Boolean,
+         "triggerPx": String,
+         "tpsl": "tp" | "sl"
+       }
+    },
+    "c": Cloid (optional)
+  }
+}
+```
+
+Meaning of keys:
+a is asset
+b is isBuy
+p is price
+s is size
+r is reduceOnly
+t is type
+c is cloid (client order id)
+
+---
+
+## Modify Multiple Orders
+
+**POST** [https://api.hyperliquid.xyz/exchange](https://api.hyperliquid.xyz/exchange)
+
+### Headers (CSV)
+
+```
+Name,Type,Description
+Content-Type*,String,"application/json"
+```
+
+### Request Body (CSV)
+
+```
+Name,Type,Description
+action*,Object,See schema below
+nonce*,Number,"Recommended to use the current timestamp in milliseconds"
+signature*,Object,
+vaultAddress,String,"If trading on behalf of a vault or subaccount, its Onchain address in 42-character hexadecimal format; e.g. 0x0000000000000000000000000000000000000000"
+expiresAfter,Number,"Timestamp in milliseconds"
+```
+
+#### Action Object (Batch Modify Example)
+
+```json
+{
+  "type": "batchModify",
+  "modifies": [{
+    "oid": Number | Cloid,
+    "order": {
+      "a": Number,
+      "b": Boolean,
+      "p": String,
+      "s": String,
+      "r": Boolean,
+      "t": {
+        "limit": {
+          "tif": "Alo" | "Ioc" | "Gtc"
+        }
+        // or
+        "trigger": {
+           "isMarket": Boolean,
+           "triggerPx": String,
+           "tpsl": "tp" | "sl"
+         }
+      },
+      "c": Cloid (optional)
+    }
+  }]
+}
+```
+
+Meaning of keys:
+a is asset
+b is isBuy
+p is price
+s is size
+r is reduceOnly
+t is type
+c is cloid (client order id)
+
+---
+
+## Update Leverage
+
+**POST** [https://api.hyperliquid.xyz/exchange](https://api.hyperliquid.xyz/exchange)
+*Update cross or isolated leverage on a coin.*
+
+### Headers (CSV)
+
+```
+Name,Type,Description
+Content-Type*,String,"application/json"
+```
+
+### Request Body (CSV)
+
+```
+Name,Type,Description
+action*,Object,See schema below
+nonce*,Number,"Recommended to use the current timestamp in milliseconds"
+signature*,Object,
+vaultAddress,String,"If trading on behalf of a vault or subaccount, its Onchain address in 42-character hexadecimal format; e.g. 0x0000000000000000000000000000000000000000"
+expiresAfter,Number,"Timestamp in milliseconds"
+```
+
+#### Action Object (Update Leverage Example)
+
+```json
+{
+  "type": "updateLeverage",
+  "asset": index of coin,
+  "isCross": true or false,
+  "leverage": integer representing new leverage
+}
+```
+
+### Response Example
+
+```json
+{"status": "ok", "response": {"type": "default"}}
+```
+
+---
+
+## Update Isolated Margin
+
+**POST** [https://api.hyperliquid.xyz/exchange](https://api.hyperliquid.xyz/exchange)
+*Add or remove margin from isolated position.*
+
+> Note: To target a specific leverage instead of a USDC value of margin change, there is an alternate action:
+> `{"type": "topUpIsolatedOnlyMargin", "asset": <asset>, "leverage": <float string>}`
+
+### Headers (CSV)
+
+```
+Name,Type,Description
+Content-Type*,String,"application/json"
+```
+
+### Request Body (CSV)
+
+```
+Name,Type,Description
+action*,Object,See schema below
+nonce*,Number,"Recommended to use the current timestamp in milliseconds"
+signature*,Object,
+vaultAddress,String,"If trading on behalf of a vault or subaccount, its Onchain address in 42-character hexadecimal format; e.g. 0x0000000000000000000000000000000000000000"
+expiresAfter,Number,"Timestamp in milliseconds"
+```
+
+#### Action Object (Update Isolated Margin Example)
+
+```json
+{
+  "type": "updateIsolatedMargin",
+  "asset": index of coin,
+  "isBuy": true,
+  "ntli": int representing amount to add or remove with 6 decimals
+}
+```
+
+### Response Example
+
+```json
+{"status": "ok", "response": {"type": "default"}}
+```
+
+--------------------------------------------------------
+
+## Core USDC Transfer
+
+**POST** [https://api.hyperliquid.xyz/exchange](https://api.hyperliquid.xyz/exchange)
+Send usd to another address. This transfer does not touch the EVM bridge.
+
+### Headers (CSV)
+
+```
+Name,Type,Description
+Content-Type*,String,"application/json"
+```
+
+### Request Body (CSV)
+
+```
+Name,Type,Description
+action*,Object,See schema below
+nonce*,Number,"Recommended to use the current timestamp in milliseconds"
+signature*,Object,
+```
+
+#### Action Object
+
+```json
+{
+  "type": "usdSend",
+  "hyperliquidChain": "Mainnet", // or "Testnet"
+  "signatureChainId": "<hex chain id, e.g. 0xa4b1 for Arbitrum>",
+  "destination": "<address in 42-character hexadecimal>",
+  "amount": "<usd as string, e.g. '1'>",
+  "time": <timestamp in ms>
+}
+```
+
+### Response Example
+
+```json
+{"status": "ok", "response": {"type": "default"}}
+```
+
+---
+
+## Core Spot Transfer
+
+**POST** [https://api.hyperliquid.xyz/exchange](https://api.hyperliquid.xyz/exchange)
+Send spot assets to another address.
+
+### Headers (CSV)
+
+```
+Name,Type,Description
+Content-Type*,String,"application/json"
+```
+
+### Request Body (CSV)
+
+```
+Name,Type,Description
+action*,Object,See schema below
+nonce*,Number,"Recommended to use the current timestamp in milliseconds"
+signature*,Object,
+```
+
+#### Action Object
+
+```json
+{
+  "type": "spotSend",
+  "hyperliquidChain": "Mainnet", // or "Testnet"
+  "signatureChainId": "<hex chain id, e.g. 0xa4b1 for Arbitrum>",
+  "destination": "<address in 42-character hexadecimal>",
+  "token": "<tokenName:tokenId>",
+  "amount": "<amount as string, e.g. '0.01'>",
+  "time": <timestamp in ms>
+}
+```
+
+**Sign Typed Data Example**
+
+```json
+{
+  "types": {
+    "HyperliquidTransaction:SpotSend": [
+      {"name": "hyperliquidChain", "type": "string"},
+      {"name": "destination", "type": "string"},
+      {"name": "token", "type": "string"},
+      {"name": "amount", "type": "string"},
+      {"name": "time", "type": "uint64"}
+    ]
+  },
+  "primaryType": "HyperliquidTransaction:SpotSend",
+  "domain": {
+    "name": "HyperliquidSignTransaction",
+    "version": "1",
+    "chainId": 42161,
+    "verifyingContract": "0x0000000000000000000000000000000000000000"
+  },
+  "message": {
+    "destination": "0x0000000000000000000000000000000000000000",
+    "token": "PURR:0xc1fb593aeffbeb02f85e0308e9956a90",
+    "amount": "0.1",
+    "time": 1716531066415,
+    "hyperliquidChain": "Mainnet"
+  }
+}
+```
+
+### Response Example
+
+```json
+{"status": "ok", "response": {"type": "default"}}
+```
+
+---
+
+## Initiate a Withdrawal Request
+
+**POST** [https://api.hyperliquid.xyz/exchange](https://api.hyperliquid.xyz/exchange)
+*Initiates the withdrawal flow. \$1 fee, \~5 minutes to finalize.*
+
+### Headers (CSV)
+
+```
+Name,Type,Description
+Content-Type*,String,"application/json"
+```
+
+### Request Body (CSV)
+
+```
+Name,Type,Description
+action*,Object,See schema below
+nonce*,Number,"Recommended to use the current timestamp in milliseconds, must match nonce in action"
+signature*,Object,
+```
+
+#### Action Object
+
+```json
+{
+  "type": "withdraw3",
+  "hyperliquidChain": "Mainnet", // or "Testnet"
+  "signatureChainId": "<hex chain id>",
+  "amount": "<usd as string>",
+  "time": <timestamp in ms>,
+  "destination": "<address in 42-character hexadecimal>"
+}
+```
+
+### Response Example
+
+```json
+{"status": "ok", "response": {"type": "default"}}
+```
+
+---
+
+## Transfer from Spot Account to Perp Account (and vice versa)
+
+**POST** [https://api.hyperliquid.xyz/exchange](https://api.hyperliquid.xyz/exchange)
+*Transfer USDC from spot wallet to perp wallet and vice versa.*
+
+### Headers (CSV)
+
+```
+Name,Value
+Content-Type*,"application/json"
+```
+
+### Body (CSV)
+
+```
+Name,Type,Description
+action*,Object,See schema below
+nonce*,Number,"Recommended to use the current timestamp in milliseconds, must match nonce in action"
+signature*,Object,
+```
+
+#### Action Object
+
+```json
+{
+  "type": "usdClassTransfer",
+  "hyperliquidChain": "Mainnet", // or "Testnet"
+  "signatureChainId": "<hex chain id>",
+  "amount": "<usd as string, can include subaccount:address>",
+  "toPerp": true,
+  "nonce": <timestamp in ms>
+}
+```
+
+### Response Example
+
+```json
+{"status": "ok", "response": {"type": "default"}}
+```
+
+---
+
+## Send Asset (Testnet Only)
+
+**POST** [https://api.hyperliquid.xyz/exchange](https://api.hyperliquid.xyz/exchange)
+*Transfer tokens between different dexs/users. Only collateral can be transferred to/from a Perps Dex.*
+
+### Headers (CSV)
+
+```
+Name,Value
+Content-Type*,"application/json"
+```
+
+### Body (CSV)
+
+```
+Name,Type,Description
+action*,Object,See schema below
+nonce*,Number,"Recommended to use the current timestamp in milliseconds, must match nonce in action"
+signature*,Object,
+```
+
+#### Action Object
+
+```json
+{
+  "type": "sendAsset",
+  "hyperliquidChain": "Mainnet", // or "Testnet"
+  "signatureChainId": "<hex chain id>",
+  "destination": "<address>",
+  "sourceDex": "<perp dex name>",
+  "destinationDex": "<perp dex name>",
+  "token": "<tokenName:tokenId>",
+  "amount": "<amount as string>",
+  "fromSubAccount": "<address or empty string>",
+  "nonce": <timestamp in ms>
+}
+```
+
+### Response Example
+
+```json
+{"status": "ok", "response": {"type": "default"}}
+```
+
+---
+
+## Deposit into Staking
+
+**POST** [https://api.hyperliquid.xyz/exchange](https://api.hyperliquid.xyz/exchange)
+*Transfer native token from spot account to staking for delegating to validators.*
+
+### Headers (CSV)
+
+```
+Name,Value
+Content-Type*,"application/json"
+```
+
+### Body (CSV)
+
+```
+Name,Type,Description
+action*,Object,See schema below
+nonce*,Number,"Recommended to use the current timestamp in milliseconds, must match nonce in action"
+signature*,Object,
+```
+
+#### Action Object
+
+```json
+{
+  "type": "cDeposit",
+  "hyperliquidChain": "Mainnet", // or "Testnet"
+  "signatureChainId": "<hex chain id>",
+  "wei": <amount as number>,
+  "nonce": <timestamp in ms>
+}
+```
+
+### Response Example
+
+```json
+{"status": "ok", "response": {"type": "default"}}
+```
+
+---
+
+## Withdraw from Staking
+
+**POST** [https://api.hyperliquid.xyz/exchange](https://api.hyperliquid.xyz/exchange)
+*Transfer from staking to spot account (7-day unstaking queue).*
+
+### Headers (CSV)
+
+```
+Name,Value
+Content-Type*,"application/json"
+```
+
+### Body (CSV)
+
+```
+Name,Type,Description
+action*,Object,See schema below
+nonce*,Number,"Recommended to use the current timestamp in milliseconds, must match nonce in action"
+signature*,Object,
+```
+
+#### Action Object
+
+```json
+{
+  "type": "cWithdraw",
+  "hyperliquidChain": "Mainnet", // or "Testnet"
+  "signatureChainId": "<hex chain id>",
+  "wei": <amount as number>,
+  "nonce": <timestamp in ms>
+}
+```
+
+### Response Example
+
+```json
+{"status": "ok", "response": {"type": "default"}}
+```
+
+---
+
+## Delegate or Undelegate Stake from Validator
+
+**POST** [https://api.hyperliquid.xyz/exchange](https://api.hyperliquid.xyz/exchange)
+*Delegate or undelegate tokens to/from validator. Delegations to a validator have a lockup of 1 day.*
+
+### Headers (CSV)
+
+```
+Name,Value
+Content-Type*,"application/json"
+```
+
+### Body (CSV)
+
+```
+Name,Type,Description
+action*,Object,See schema below
+nonce*,Number,"Recommended to use the current timestamp in milliseconds, must match nonce in action"
+signature*,Object,
+```
+
+#### Action Object
+
+```json
+{
+  "type": "tokenDelegate",
+  "hyperliquidChain": "Mainnet", // or "Testnet"
+  "signatureChainId": "<hex chain id>",
+  "validator": "<address>",
+  "isUndelegate": <boolean>,
+  "wei": <number>,
+  "nonce": <timestamp in ms>
+}
+```
+
+### Response Example
+
+```json
+{"status": "ok", "response": {"type": "default"}}
+```
+
+---
+
+## Deposit or Withdraw from a Vault
+
+**POST** [https://api.hyperliquid.xyz/exchange](https://api.hyperliquid.xyz/exchange)
+*Add or remove funds from a vault.*
+
+### Headers (CSV)
+
+```
+Name,Value
+Content-Type*,"application/json"
+```
+
+### Body (CSV)
+
+```
+Name,Type,Description
+action*,Object,See schema below
+nonce*,Number,"Recommended to use the current timestamp in milliseconds"
+signature*,Object,
+expiresAfter,Number,"Timestamp in milliseconds"
+```
+
+#### Action Object
+
+```json
+{
+  "type": "vaultTransfer",
+  "vaultAddress": "<address>",
+  "isDeposit": <boolean>,
+  "usd": <number>
+}
+```
+
+### Response Example
+
+```json
+{"status": "ok", "response": {"type": "default"}}
+```
+
+---
+
+## Approve an API Wallet
+
+**POST** [https://api.hyperliquid.xyz/exchange](https://api.hyperliquid.xyz/exchange)
+*Approves an API Wallet (Agent Wallet).*
+
+### Headers (CSV)
+
+```
+Name,Value
+Content-Type*,"application/json"
+```
+
+### Body (CSV)
+
+```
+Name,Type,Description
+action*,Object,See schema below
+nonce*,Number,"Recommended to use the current timestamp in milliseconds"
+signature*,Object,
+```
+
+#### Action Object
+
+```json
+{
+  "type": "approveAgent",
+  "hyperliquidChain": "Mainnet", // or "Testnet"
+  "signatureChainId": "<hex chain id>",
+  "agentAddress": "<address>",
+  "agentName": "<optional name>",
+  "nonce": <timestamp in ms>
+}
+```
+
+### Response Example
+
+```json
+{"status": "ok", "response": {"type": "default"}}
+```
+
+------------------------------------------------------------------------
+
+Here’s your final **Exchange endpoint** actions chunk, formatted for your archive.
+**All header/body sections are CSV, all schemas and keys explained, all response examples as JSON.**
+
+---
+
+## Approve a Builder Fee
+
+**POST** [https://api.hyperliquid.xyz/exchange](https://api.hyperliquid.xyz/exchange)\*\*
+Approve a maximum fee rate for a builder.
+
+### Headers (CSV)
+
+```
+Name,Value
+Content-Type*,"application/json"
+```
+
+### Body (CSV)
+
+```
+Name,Type,Description
+action*,Object,See schema below
+nonce*,number,"Recommended to use the current timestamp in milliseconds"
+signature*,Object,
+```
+
+#### Action Object
+
+```json
+{
+  "type": "approveBuilderFee",
+  "hyperliquidChain": "Mainnet", // or "Testnet"
+  "signatureChainId": "<hex chain id, e.g. 0xa4b1>",
+  "maxFeeRate": "<percent string, e.g. '0.001%'>",
+  "builder": "<address in 42-character hexadecimal>",
+  "nonce": <timestamp in ms>
+}
+```
+
+### Response Example
+
+```json
+{"status": "ok", "response": {"type": "default"}}
+```
+
+---
+
+## Place a TWAP Order
+
+**POST** [https://api.hyperliquid.xyz/exchange](https://api.hyperliquid.xyz/exchange)
+
+### Headers (CSV)
+
+```
+Name,Type,Description
+Content-Type*,String,"application/json"
+```
+
+### Request Body (CSV)
+
+```
+Name,Type,Description
+action*,Object,See schema below
+nonce*,Number,"Recommended to use the current timestamp in milliseconds"
+signature*,Object,
+vaultAddress,String,"If trading on behalf of a vault or subaccount, its Onchain address in 42-character hexadecimal format"
+expiresAfter,Number,"Timestamp in milliseconds"
+```
+
+#### Action Object
+
+```json
+{
+  "type": "twapOrder",
+  "twap": {
+    "a": Number,     // asset
+    "b": Boolean,    // isBuy
+    "s": String,     // size
+    "r": Boolean,    // reduceOnly
+    "m": Number,     // minutes
+    "t": Boolean     // randomize
+  }
+}
+```
+
+Meaning of keys:
+
+* a is asset
+* b is isBuy
+* s is size
+* r is reduceOnly
+* m is minutes
+* t is randomize
+
+### Response Example
+
+```json
+{
+   "status":"ok",
+   "response":{
+      "type":"twapOrder",
+      "data":{
+         "status": {
+            "running":{
+               "twapId":77738308
+            }
+         }
+      }
+   }
+}
+```
+
+---
+
+## Cancel a TWAP Order
+
+**POST** [https://api.hyperliquid.xyz/exchange](https://api.hyperliquid.xyz/exchange)
+
+### Headers (CSV)
+
+```
+Name,Type,Description
+Content-Type*,String,"application/json"
+```
+
+### Request Body (CSV)
+
+```
+Name,Type,Description
+action*,Object,See schema below
+nonce*,Number,"Recommended to use the current timestamp in milliseconds"
+signature*,Object,
+vaultAddress,String,"If trading on behalf of a vault or subaccount, its address in 42-character hexadecimal format"
+expiresAfter,Number,"Timestamp in milliseconds"
+```
+
+#### Action Object
+
+```json
+{
+  "type": "twapCancel",
+  "a": Number, // asset
+  "t": Number  // twap_id
+}
+```
+
+Meaning of keys:
+
+* a is asset
+* t is twap\_id
+
+### Response Example
+
+```json
+{
+   "status":"ok",
+   "response":{
+      "type":"twapCancel",
+      "data":{
+         "status": "success"
+      }
+   }
+}
+```
+
+---
+
+## Reserve Additional Actions
+
+**POST** [https://api.hyperliquid.xyz/exchange](https://api.hyperliquid.xyz/exchange)\*\*
+Instead of trading to increase the address-based rate limits, this action allows reserving additional actions for 0.0005 USDC per request. The cost is paid from the Perps balance.
+
+### Headers (CSV)
+
+```
+Name,Type,Description
+Content-Type*,String,"application/json"
+```
+
+### Request Body (CSV)
+
+```
+Name,Type,Description
+action*,Object,See schema below
+nonce*,Number,"Recommended to use the current timestamp in milliseconds"
+signature*,Object,
+expiresAfter,Number,"Timestamp in milliseconds"
+```
+
+#### Action Object
+
+```json
+{
+  "type": "reserveRequestWeight",
+  "weight": Number
+}
+```
+
+### Response Example
+
+```json
+{"status": "ok", "response": {"type": "default"}}
+```
+
+---------------------------------------------------------
+
+# For Developers
+
+## API
+
+### Websocket
+
+WebSocket endpoints are available for real-time data streaming and as an alternative to HTTP request sending on the Hyperliquid exchange. The WebSocket URLs by network are:
+
+* **Mainnet:** `wss://api.hyperliquid.xyz/ws`
+* **Testnet:** `wss://api.hyperliquid-testnet.xyz/ws`
+
+---
+
+## Connecting
+
+To connect to the WebSocket API, you must establish a WebSocket connection to the respective URL based on your desired network. Once connected, you can start sending subscription messages to receive real-time data updates.
+
+### Example from Command Line
+
+```shell
+$ wscat -c wss://api.hyperliquid.xyz/ws
+Connected (press CTRL+C to quit)
+>  { "method": "subscribe", "subscription": { "type": "trades", "coin": "SOL" } }
+< {"channel":"subscriptionResponse","data":{"method":"subscribe","subscription":{"type":"trades","coin":"SOL"}}}
+```
+
+> **Note:**
+> This doc uses Typescript for defining many of the message types.
+> If you prefer to use Python, you can check out the equivalent types in the Python SDK:
+> [types.py](https://github.com/hyperliquid-dex/hyperliquid-python-sdk/blob/master/hyperliquid/utils/types.py)
+> and example connection code at [websocket\_manager.py](https://github.com/hyperliquid-dex/hyperliquid-python-sdk/blob/master/hyperliquid/websocket_manager.py)
+
+--------------------------------------------------------
+
+## Websocket
+
+### Subscriptions
+
+This page describes subscribing to data streams using the WebSocket API.
+
+---
+
+### Subscription Messages
+
+To subscribe to specific data feeds, send a subscription message in this format:
+
+```json
+{
+  "method": "subscribe",
+  "subscription": { ... }
+}
+```
+
+* The **subscription ack** provides a snapshot of previous data for time series data (e.g., user fills). These snapshot messages are tagged with `isSnapshot: true` and can be ignored if the previous messages were already processed.
+* The **subscription object** contains the details of the specific feed you want to subscribe to.
+
+#### Supported Subscription Types and Message Formats
+
+* **allMids:**
+
+  * Message: `{"type": "allMids", "dex": "<dex>"}`
+  * Data: AllMids
+  * *dex is optional; if not provided, the first perp dex is used. Spot mids are only included with the first perp dex.*
+
+* **notification:**
+
+  * Message: `{"type": "notification", "user": "<address>"}`
+  * Data: Notification
+
+* **webData2:**
+
+  * Message: `{"type": "webData2", "user": "<address>"}`
+  * Data: WebData2
+
+* **candle:**
+
+  * Message: `{"type": "candle", "coin": "<coin_symbol>", "interval": "<candle_interval>"}`
+  * *Supported intervals: "1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "8h", "12h", "1d", "3d", "1w", "1M"*
+  * Data: Candle\[]
+
+* **l2Book:**
+
+  * Message: `{"type": "l2Book", "coin": "<coin_symbol>"}`
+  * Optional: `nSigFigs: int`, `mantissa: int`
+  * Data: WsBook
+
+* **trades:**
+
+  * Message: `{"type": "trades", "coin": "<coin_symbol>"}`
+  * Data: WsTrade\[]
+
+* **orderUpdates:**
+
+  * Message: `{"type": "orderUpdates", "user": "<address>"}`
+  * Data: WsOrder\[]
+
+* **userEvents:**
+
+  * Message: `{"type": "userEvents", "user": "<address>"}`
+  * Data: WsUserEvent
+
+* **userFills:**
+
+  * Message: `{"type": "userFills", "user": "<address>"}`
+  * Optional: `aggregateByTime: bool`
+  * Data: WsUserFills
+
+* **userFundings:**
+
+  * Message: `{"type": "userFundings", "user": "<address>"}`
+  * Data: WsUserFundings
+
+* **userNonFundingLedgerUpdates:**
+
+  * Message: `{"type": "userNonFundingLedgerUpdates", "user": "<address>"}`
+  * Data: WsUserNonFundingLedgerUpdates
+
+* **activeAssetCtx:**
+
+  * Message: `{"type": "activeAssetCtx", "coin": "<coin_symbol>"}`
+  * Data: WsActiveAssetCtx or WsActiveSpotAssetCtx
+
+* **activeAssetData:** *(Perps only)*
+
+  * Message: `{"type": "activeAssetData", "user": "<address>", "coin": "<coin_symbol>"}`
+  * Data: WsActiveAssetData
+
+* **userTwapSliceFills:**
+
+  * Message: `{"type": "userTwapSliceFills", "user": "<address>"}`
+  * Data: WsUserTwapSliceFills
+
+* **userTwapHistory:**
+
+  * Message: `{"type": "userTwapHistory", "user": "<address>"}`
+  * Data: WsUserTwapHistory
+
+* **bbo:**
+
+  * Message: `{"type": "bbo", "coin": "<coin>"}`
+  * Data: WsBbo
+
+---
+
+### Data Formats
+
+* **Server responds** to successful subscriptions with a message:
+
+  * `channel`: "subscriptionResponse"
+  * `data`: the original subscription
+* **After subscribing**, the server starts sending messages with `channel` set to the corresponding subscription type (e.g., `"allMids"`) and the `data` field providing the subscribed data.
+
+**Data field formats depend on the subscription type.**
+Below are key formats and interface/type definitions (TypeScript syntax):
+
+#### Example: Data Type Definitions
+
+```typescript
+interface WsTrade {
+  coin: string;
+  side: string;
+  px: string;
+  sz: string;
+  hash: string;
+  time: number;
+  tid: number;  // 50-bit hash of (buyer_oid, seller_oid)
+  users: [string, string]; // [buyer, seller]
+}
+
+interface WsBook {
+  coin: string;
+  levels: [Array<WsLevel>, Array<WsLevel>];
+  time: number;
+}
+
+interface WsBbo {
+  coin: string;
+  time: number;
+  bbo: [WsLevel | null, WsLevel | null];
+}
+
+interface WsLevel {
+  px: string; // price
+  sz: string; // size
+  n: number;  // number of orders
+}
+
+interface Notification {
+  notification: string;
+}
+
+interface AllMids {
+  mids: Record<string, string>;
+}
+
+interface Candle {
+  t: number; // open millis
+  T: number; // close millis
+  s: string; // coin
+  i: string; // interval
+  o: number; // open price
+  c: number; // close price
+  h: number; // high price
+  l: number; // low price
+  v: number; // volume (base unit)
+  n: number; // number of trades
+}
+```
+
+**(All further interfaces are included in your pasted doc and should be copied as needed for your archive; all field meanings are preserved above.)**
+
+---
+
+### Example Subscription Messages
+
+Subscribe to all mid prices:
+
+```json
+{ "method": "subscribe", "subscription": { "type": "allMids" } }
+```
+
+Subscribe to notifications for a user:
+
+```json
+{ "method": "subscribe", "subscription": { "type": "notification", "user": "<address>" } }
+```
+
+Subscribe to web data for a user:
+
+```json
+{ "method": "subscribe", "subscription": { "type": "webData", "user": "<address>" } }
+```
+
+Subscribe to candle updates for a coin and interval:
+
+```json
+{ "method": "subscribe", "subscription": { "type": "candle", "coin": "<coin_symbol>", "interval": "<candle_interval>" } }
+```
+
+Subscribe to order book updates for a coin:
+
+```json
+{ "method": "subscribe", "subscription": { "type": "l2Book", "coin": "<coin_symbol>" } }
+```
+
+Subscribe to trades for a coin:
+
+```json
+{ "method": "subscribe", "subscription": { "type": "trades", "coin": "<coin_symbol>" } }
+```
+
+---
+
+### Unsubscribing from WebSocket Feeds
+
+To unsubscribe from a specific feed, send:
+
+```json
+{
+  "method": "unsubscribe",
+  "subscription": { ... }
+}
+```
+
+The subscription object should match the original subscription message.
+Unsubscribing from one feed does **not** affect other active subscriptions. To unsubscribe from multiple feeds, send multiple unsubscribe messages.
+
+--------------------------------------------------------------------
+
+# For Developers
+
+## API
+
+### Websocket
+
+#### Post Requests
+
+**Posting via WebSocket:**
+The WebSocket API supports posting requests that you can normally post through the HTTP API (info requests or signed actions).
+
+* See the Info endpoint section for info request payloads.
+* See the Exchange endpoint section for signed action payloads.
+
+To send a payload via WebSocket, wrap it as:
+
+```json
+{
+  "method": "post",
+  "id": <number>,
+  "request": {
+    "type": "info" | "action",
+    "payload": { ... }
+  }
+}
+```
+
+* **method** and **id** fields are mandatory.
+* Use a unique **id** for every post to track outstanding requests.
+* *Explorer requests are NOT supported via WebSocket.*
+
+**Response Format:**
+
+```json
+{
+  "channel": "post",
+  "data": {
+    "id": <number>,
+    "response": {
+      "type": "info" | "action" | "error",
+      "payload": { ... }
+    }
+  }
+}
+```
+
+---
+
+### Examples
+
+**Sending an L2Book info request:**
+
+```json
+{
+  "method": "post",
+  "id": 123,
+  "request": {
+    "type": "info",
+    "payload": {
+      "type": "l2Book",
+      "coin": "ETH",
+      "nSigFigs": 5,
+      "mantissa": null
+    }
+  }
+}
+```
+
+**Sample response:**
+
+```json
+{
+  "channel": "post",
+  "data": {
+    "id": <number>,
+    "response": {
+      "type": "info",
+      "payload": {
+        "type": "l2Book",
+        "data": {
+          "coin": "ETH",
+          "time": <number>,
+          "levels": [
+            [{"px":"3007.1","sz":"2.7954","n":1}],
+            [{"px":"3040.1","sz":"3.9499","n":1}]
+          ]
+        }
+      }
+    }
+  }
+}
+```
+
+**Sending an order signed action request:**
+
+```json
+{
+  "method": "post",
+  "id": 256,
+  "request": {
+    "type": "action",
+    "payload": {
+      "action": {
+        "type": "order",
+        "orders": [{"a": 4, "b": true, "p": "1100", "s": "0.2", "r": false, "t": {"limit": {"tif": "Gtc"}}}],
+        "grouping": "na"
+      },
+      "nonce": 1713825891591,
+      "signature": {
+        "r": "...",
+        "s": "...",
+        "v": "..."
+      },
+      "vaultAddress": "0x12...3"
+    }
+  }
+}
+```
+
+**Sample response:**
+
+```json
+{
+  "channel": "post",
+  "data": {
+    "id": 256,
+    "response": {
+      "type":"action",
+      "payload": {
+        "status": "ok",
+        "response": {
+          "type": "order",
+          "data": {
+            "statuses": [
+              {
+                "resting": {
+                  "oid": 88383
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+---
+
+## Websocket Timeouts and Heartbeats
+
+To keep a WebSocket connection alive:
+
+* The server will close any connection if it hasn't sent a message in the last 60 seconds.
+* If your subscription doesn't receive messages every 60s, send a heartbeat:
+
+```json
+{ "method": "ping" }
+```
+
+**Server responds:**
+
+```json
+{ "channel": "pong" }
+```
+
+---
+
+## Error Responses
+
+Order and cancel errors are usually returned as a vector matching the length of the batched request.
+
+**Possible Batched Error Responses (CSV):**
+
+```
+Error source,Error type,Error string
+Order,Tick,Price must be divisible by tick size.
+Order,MinTradeNtl,Order must have minimum value of $10.
+Order,MinTradeSpotNtl,Order must have minimum value of 10 {quote_token}.
+Order,PerpMargin,Insufficient margin to place order.
+Order,ReduceOnly,Reduce only order would increase position.
+Order,BadAloPx,Post only order would have immediately matched, bbo was {bbo}.
+Order,IocCancel,Order could not immediately match against any resting orders.
+Order,BadTriggerPx,Invalid TP/SL price.
+Order,MarketOrderNoLiquidity,No liquidity available for market order.
+Order,PositionIncreaseAtOpenInterestCap,Order would increase open interest while open interest is capped
+Order,PositionFlipAtOpenInterestCap,Order would increase open interest while open interest is capped
+Order,TooAggressiveAtOpenInterestCap,Order rejected due to price more aggressive than oracle while at open interest cap
+Order,OpenInterestIncrease,Order would increase open interest too quickly
+Order,InsufficientSpotBalance,(Spot-only) Order has insufficient spot balance to trade
+Order,Oracle,Order price too far from oracle
+Order,PerpMaxPosition,Order would cause position to exceed margin tier limit at current leverage
+Cancel,MissingOrder,Order was never placed, already canceled, or filled.
+```
+
+**Other error info:**
+
+* Some errors are deterministic (e.g. empty batch, invalid tick) and are returned once for the entire payload, not per order/cancel.
+* For batching, handle the case where a single error is returned for a batch of multiple orders.
+* See historical orders doc for a list of all cancel/reject statuses.
+
+---
+
+## Signing
+
+**Best Practice:**
+
+* *Use an existing SDK rather than manual signing.*
+* Manual signature errors are hard to debug, and an invalid signature results in errors like:
+
+  * `"L1 error: User or API Wallet 0x0123... does not exist."`
+  * `"Must deposit before performing actions. User: 0x123..."`
+
+**Common signing pitfalls:**
+
+1. There are two signing schemes (see Python SDK: `sign_l1_action` vs `sign_user_signed_action`).
+2. Order of fields matters for msgpack.
+3. Trailing zeroes on numbers.
+4. Upper/lowercase in address fields (always use lowercase before signing and sending).
+5. Local recover signer may work, but payload construction may not match network requirements.
+
+**Debugging:**
+
+* Read through the Python SDK carefully.
+* Add logging to find where your output diverges from the expected payload.
+* If stuck, ensure your signature and message structure match the SDK exactly.
+
+----------------------------------------------------------------------------------------------------
+
+# For Developers
+
+## API
+
+### Rate Limits and User Limits
+
+**REST (per IP):**
+
+* **1200 aggregate weight per minute**.
+
+**Exchange API Request Weights (CSV):**
+
+```
+Request type,Weight calculation,Example
+Unbatched action,1,""
+Batched order action,1 + floor(batch_length / 40),"Batched order of 79: 1+floor(79/40)=2"
+```
+
+* batch\_length = length of array in action (number of orders in a batch).
+* Batched request with n orders/cancels = 1 request for IP rate limiting, **n** for address-based.
+
+**Info Requests Weights (CSV):**
+
+```
+Request,Weight
+l2Book,2
+allMids,2
+clearinghouseState,2
+orderStatus,2
+spotClearinghouseState,2
+exchangeStatus,2
+userRole,60
+<all others>,20
+Explorer API,40
+```
+
+* *Older blocks not recently queried may have higher weight. Use S3 bucket for large batch requests.*
+
+**WebSocket Limits:**
+
+* Max 100 websocket connections.
+* Max 1000 websocket subscriptions.
+* Max 10 unique users across user-specific websocket subs.
+* Max 2000 messages/minute to Hyperliquid (all connections).
+* Max 100 inflight post messages (all connections).
+
+**Address-Based Limits:**
+
+* 1 request per 1 USDC traded (since address inception).
+
+* Each address starts with **buffer of 10,000 requests**.
+
+* Rate limited: one request every 10 seconds.
+
+* **Cancels:** limit = min(limit + 100000, limit \* 2)
+
+* *Rate limit applies to actions, not info requests.*
+
+* **Default open order limit:** 1000 + 1 per 5M USDC volume (max 5000 open orders).
+
+  * At 1000+ open orders, reduce-only or trigger order is rejected.
+
+* **Batched request:** counts as one for IP, **n** for address rate limiting.
+
+---
+
+## API
+
+### Bridge2
+
+**General Information:**
+
+* Hyperliquid ↔ Arbitrum bridge:
+  [https://arbiscan.io/address/0x2df1c51e09aecf9cacb7bc98cb1742757f163df7](https://arbiscan.io/address/0x2df1c51e09aecf9cacb7bc98cb1742757f163df7)
+* Bridge code:
+  [https://github.com/hyperliquid-dex/contracts/blob/master/Bridge2.sol](https://github.com/hyperliquid-dex/contracts/blob/master/Bridge2.sol)
+
+#### Deposit
+
+* Send native USDC to bridge, credited in <1 min.
+* **Minimum deposit:** 5 USDC (less is lost).
+
+#### Withdraw
+
+* Requires wallet signature on Hyperliquid only (no Arbitrum tx).
+* Validators handle the withdrawal, funds arrive in 3–4 minutes.
+
+**signTypedData payload (Rust struct, see Python SDK for py impl):**
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub(crate) struct WithdrawAction3 {
+    pub(crate) signature_chain_id: U256,
+    pub(crate) hyperliquid_chain: Chain,
+    pub(crate) destination: String,
+    pub(crate) amount: String,
+    pub(crate) time: u64,
+}
+```
+
+**Eip712 implementation details (abridged for reference):**
+
+* Type hash uses:
+
+  * hyperliquidChain: String
+  * destination: String
+  * amount: String
+  * time: Uint(64)
+
+**Example signed Hyperliquid action:**
+
+```json
+{
+    "action": {
+        "type": "withdraw3",
+        "signatureChainId": "0xa4b1",
+        "hyperliquidChain": "Mainnet" or "Testnet",
+        "destination": "0x000....0",
+        "amount": "12.3",
+        "time": 1698693262
+    },
+    "nonce": 1698693262,
+    "signature": {"r": ..., "s": ..., "v": ... }
+}
+```
+
+#### Deposit with Permit
+
+**PermitPayload example:**
+
+```typescript
+const payload: PermitPayload = {
+  owner,   // address of depositor
+  spender, // bridge address: mainnet 0x2df1...3df7, testnet 0x08cf...6f89
+  value,
+  nonce,
+  deadline,
+};
+
+const isMainnet = true;
+const domain = {
+  name: isMainnet ? "USD Coin" : "USDC2",
+  version: isMainnet ? "2" : "1",
+  chainId: isMainnet ? 42161 : 421614,
+  verifyingContract: isMainnet
+    ? "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"
+    : "0x1baAbB04529D43a73232B713C0FE471f7c7334d5",
+};
+const permitTypes = {
+  Permit: [
+    { name: "owner", type: "address" },
+    { name: "spender", type: "address" },
+    { name: "value", type: "uint256" },
+    { name: "nonce", type: "uint256" },
+    { name: "deadline", type: "uint256" },
+  ],
+};
+const dataToSign = {
+  domain,
+  types: permitTypes,
+  primaryType: "Permit",
+  message: payload,
+} as const;
+const data = await walletClient.signTypedData(dataToSign);
+const signature = splitSig(data);
+```
+
+---
+
+## API
+
+### Deploying HIP-1 and HIP-2 Assets
+
+**Five-step spot asset deployment:**
+
+```typescript
+type SpotDeployAction = 
+  | { type: "spotDeploy"; registerToken2: RegisterToken2 }
+  | { type: "spotDeploy"; userGenesis: UserGenesis }
+  | { type: "spotDeploy"; genesis: Genesis }
+  | { type: "spotDeploy"; registerSpot: RegisterSpot }
+  | { type: "spotDeploy"; registerHyperliquidity: RegisterHyperliquidity }
+  | { type: "spotDeploy"; setDeployerTradingFeeShare: SetDeployerTradingFeeShare }; // optional
+```
+
+**Type definitions:**
+
+```typescript
+type RegisterToken2 = {
+  spec: TokenSpec;
+  maxGas: number;
+  fullName?: string;
+}
+
+type TokenSpec = {
+  name: string,
+  szDecimals: number,
+  weiDecimals: number,
+}
+
+/** UserGenesis can be called multiple times */
+type UserGenesis = {
+  token: number;
+  userAndWei: Array<[string, string]>;
+  existingTokenAndWei: Array<[number, string]>;
+  blacklistUsers?: Array<[string, boolean]>;
+}
+
+/** Genesis = initial token creation */
+type Genesis = {
+  token: number;
+  maxSupply: string;
+  noHyperliquidity?: boolean;
+}
+
+/** RegisterSpot: base/quote index */
+type RegisterSpot = {
+  tokens: [number, number];
+}
+
+/** RegisterHyperliquidity = seed LOB at launch */
+type RegisterHyperliquidity = {
+  spot: number;
+  startPx: string;
+  orderSz: string;
+  nOrders: number;
+  nSeededLevels?: number;
+}
+
+/** (Optional) SetDeployerTradingFeeShare */
+type SetDeployerTradingFeeShare = {
+  token: number;
+  share: string; // e.g., "0.012%", "99.4%"
+}
+```
+
+-----------------------------------------------------------------------------------
+
+You got it! Here’s the entire chunk **fully formatted for the dev reference file**.
+**All types and key descriptions preserved; everything structured; code/types in code blocks.**
+
+---
+
+# For Developers
+
+## API
+
+### Deploying HIP-3 Assets
+
+The API for deploying and operating builder-deployed perpetual DEXs involves the following L1 action:
+
+```typescript
+type PerpDeployAction =
+  | {
+      type: "perpDeploy";
+      registerAsset: RegisterAsset;
+    }
+  | {
+      type: "perpDeploy";
+      setOracle: SetOracle;
+    };
+```
+
+---
+
+#### RegisterAsset
+
+```typescript
+/**
+ * RegisterAsset can be called to initialize a new DEX and register an asset at the same time.
+ * If schema is not provided, RegisterAsset can be called multiple times to register additional assets for the DEX.
+ * @param maxGas - Max gas in native token wei. If not provided, uses current deploy auction price.
+ * @param assetRequest - New asset listing parameters (see RegisterAssetRequest below).
+ * @param dex - Name of the perp DEX (<= 6 characters).
+ * @param schema - New perp DEX parameters (see PerpDexSchemaInput below).
+ */
+type RegisterAsset = {
+  maxGas?: number;
+  assetRequest: RegisterAssetRequest;
+  dex: string;
+  schema?: PerpDexSchemaInput;
+}
+```
+
+---
+
+#### SetOracle
+
+```typescript
+/**
+ * SetOracle can be called multiple times.
+ * The markPxs outer list can be length 0, 1, or 2.
+ * The median of these inputs and the local mark price (median(best bid, best ask, last trade price))
+ * is used as the new mark price update.
+ * @param dex - Name of the perp DEX (<= 6 characters)
+ * @param oraclePxs - List (sorted by key) of asset and oracle prices.
+ * @param markPxs - Outer list of inner lists (sorted by key) of asset and mark prices.
+ */
+type SetOracle = {
+  dex: string;
+  oraclePxs: Array<[string, string]>;
+  markPxs: Array<Array<[string, string]>>;
+}
+```
+
+---
+
+#### RegisterAssetRequest
+
+```typescript
+type RegisterAssetRequest = {
+  coin: string;
+  szDecimals: number;
+  oraclePx: string;
+  marginTableId: number;
+  onlyIsolated: boolean;
+}
+```
+
+---
+
+#### PerpDexSchemaInput
+
+```typescript
+/**
+ * @param fullName - Full name of the perp DEX
+ * @param collateralToken - Collateral token index
+ * @param oracleUpdater - User to update oracles. If not provided, deployer is oracle updater.
+ */
+type PerpDexSchemaInput = {
+  fullName: string;
+  collateralToken: number;
+  oracleUpdater?: string;
+}
+```
+
+* See: [Retrieve information about the Perp Deploy Auction](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint/perpetuals#retrieve-information-about-the-perp-deploy-auction)
+
+---
+
+## HyperEVM
+
+### Overview
+
+* **HyperEVM** consists of EVM blocks built as part of Hyperliquid's execution, inheriting security from HyperBFT consensus.
+* **HYPE** is the native gas token on HyperEVM.
+* Move HYPE from HyperCore to HyperEVM: **send HYPE to `0x2222222222222222222222222222222222222222`**.
+* All interaction with the EVM is through the JSON-RPC.
+
+#### Mainnet:
+
+* Chain ID: **999**
+* JSON-RPC: `https://rpc.hyperliquid.xyz/evm`
+
+#### Testnet:
+
+* Chain ID: **998**
+
+* JSON-RPC: `https://rpc.hyperliquid-testnet.xyz/evm`
+
+* No WebSocket JSON-RPC support at `rpc.hyperliquid.xyz/evm` currently.
+
+---
+
+### Cancun Hardfork/EIP-1559
+
+* HyperEVM uses the Cancun hardfork **without blobs**.
+* **EIP-1559** is enabled (base fees and priority fees are burned).
+* Burned priority fees go to zero address's EVM balance.
+* HYPE token has **18 decimals** on both mainnet and testnet.
+
+---
+
+## HyperEVM
+
+### Dual-block Architecture
+
+* **Throughput is split:**
+
+  * Small (fast) blocks (1s, 2M gas)
+  * Large (slow) blocks (1min, 30M gas)
+* **Goal:** Fast confirmations & support for large contracts.
+* **Mempool:** Only next 8 nonces per address. TXs older than 1 day pruned.
+* **Deploying larger contracts:**
+
+  * Submit: `{"type": "evmUserModify", "usingBigBlocks": true}` to use big blocks.
+  * Reset to target small blocks after.
+  * Use `bigBlockGasPrice` (JSON-RPC) for gas estimation.
+
+---
+
+## HyperEVM
+
+### Raw HyperEVM Block Data
+
+* **Local node:** Data at `~/hl/data/evm_block_and_receipts`
+* **Remote S3:**
+
+  * Mainnet: `s3://hl-mainnet-evm-blocks/`
+  * Testnet: `s3://hl-testnet-evm-blocks/` (starts at block 18,000,000)
+* **Format:** MessagePack + LZ4 compression
+* **Purpose:** Indexers, block explorers, custom analytics
+* **Python SDK Example:**
+  [https://github.com/hyperliquid-dex/hyperliquid-python-sdk/blob/master/examples/evm\_block\_indexer.py](https://github.com/hyperliquid-dex/hyperliquid-python-sdk/blob/master/examples/evm_block_indexer.py)
+
+---
+
+## HyperEVM
+
+### Interacting with HyperCore
+
+#### Read precompiles
+
+* **Testnet EVM precompiles:**
+  Start at address: `0x0000000000000000000000000000000000000800`
+* **Read on-chain:** perps positions, spot balances, vault equity, delegations, oracle prices, L1 block number.
+* **Call example:**
+
+  ```
+  cast call 0x0000000000000000000000000000000000000807 0x000...003 --rpc-url https://rpc.hyperliquid-testnet.xyz/evm
+  ```
+* **Price conversion:**
+
+  * Perps: divide by `10^(6 - szDecimals)`
+  * Spot: divide by `10^(8 - base asset szDecimals)`
+* **Invalid input:** returns error, uses all gas for precompile call frame.
+* **Precompile gas cost:** `2000 + 65 * output_len`
+
+---
+
+#### CoreWriter contract (testnet only)
+
+* System contract: `0x3333333333333333333333333333333333333333`
+* Burns \~25,000 gas before emitting log; total \~47,000 gas per call.
+* **Files:** L1Read.sol and CoreWriter.sol show these patterns.
+
+#### Action encoding details (CSV)
+
+```
+Byte(s),Purpose,Description
+1,Encoding version,"Only version 1 supported (future upgrades possible)"
+2-4,Action ID,"3 bytes, big-endian unsigned integer"
+5+,Action-specific encoding,"Raw ABI encoding of a sequence of Solidity types"
+```
+
+---
+
+#### Action IDs (CSV)
+
+```
+Action ID,Action,Fields,Solidity Types,Notes
+1,Limit order,"(asset, isBuy, limitPx, sz, reduceOnly, encodedTif, cloid)","(uint32, bool, uint64, uint64, bool, uint8, uint128)","Tif: 1=Alo, 2=Gtc, 3=Ioc. Cloid: 0=no cloid, else use number."
+2,Vault transfer,"(vault, isDeposit, usd)","(address, bool, uint64),"
+3,Token delegate,"(validator, wei, isUndelegate)","(address, uint64, bool),"
+4,Staking deposit,wei,"uint64,"
+5,Staking withdraw,wei,"uint64,"
+6,Spot send,"(destination, token, wei)","(address, uint64, uint64),"
+7,USD class transfer,"(ntl, toPerp)","(uint64, bool),"
+8,Finalize EVM contract,"(token, encodedFinalizeEvmContractVariant, createNonce)","(uint64, uint8, uint64)","Variant: 1=Create, 2=FirstStorageSlot, 3=CustomStorageSlot"
+9,Add API wallet,"(API wallet address, API wallet name)","(address, string)","Empty name → main API wallet/agent"
+```
+
+**Example Solidity for sending an action:**
+
+```solidity
+contract CoreWriterCaller {
+    function sendUsdClassTransfer(uint64 ntl, bool toPerp) external {
+        bytes memory encodedAction = abi.encode(ntl, toPerp);
+        bytes memory data = new bytes(4 + encodedAction.length);
+        data[0] = 0x01;
+        data[1] = 0x00;
+        data[2] = 0x00;
+        data[3] = 0x07;
+        for (uint256 i = 0; i < encodedAction.length; i++) {
+            data[4 + i] = encodedAction[i];
+        }
+        CoreWriter(0x3333333333333333333333333333333333333333).sendRawAction(data);
+    }
+}
+```
+
+-------------------------------------------------------------------------
+
+# For Developers
+
+## HyperEVM
+
+### HyperCore <> HyperEVM Transfers
+
+#### Introduction
+
+* **Spot assets** can be sent between HyperCore and the HyperEVM.
+* On HyperCore: **Core spot**; On EVM: **EVM spot**.
+* The spot deployer can link a Core spot asset to any ERC20 on the EVM (either can be deployed first).
+* **HYPE** is native on both, linked to HyperEVM’s native gas balance (not ERC20).
+
+#### System Addresses
+
+| Token     | System Address Example                                                                           |
+| --------- | ------------------------------------------------------------------------------------------------ |
+| Any token | 0x20... + token index (big-endian) (e.g. index 200 = 0x20000000000000000000000000000000000000c8) |
+| HYPE      | 0x2222222222222222222222222222222222222222                                                       |
+
+#### Transferring HYPE
+
+* HYPE on EVM is received as the native gas token (not ERC20).
+* To send HYPE from EVM → HyperCore: send native value to 0x222...2; emits `Received(address indexed user, uint256 amount)`.
+
+#### Transferring between Core and EVM
+
+* **Core → EVM:** Use `spotSend` action or frontend, with the *system address* as destination.
+
+  * Tokens credited via a system transaction that calls `transfer(recipient, amount)` on the linked contract.
+* **EVM → Core:** Use ERC20 transfer to the *system address*. Tokens credited based on `Transfer(address from, address to, uint256 value)` event from the contract.
+
+**Caveat:** Don’t assume fungibility! Read caveats below.
+
+#### Gas Costs (CSV)
+
+```
+Direction,Gas Cost
+EVM to Core,Same as ERC20 transfer/HYPE transfer to any address
+Core to EVM,200k gas at base gas price of next EVM block
+```
+
+#### Linking Core and EVM Spot Assets
+
+To enable Core/EVM spot transfers:
+
+* System address must hold the total non-system balance on the other side.
+* Example: for an ERC20 contract for a Core spot asset, the system contract must have all EVM spot supply = max Core spot supply.
+
+**Linking action (TypeScript):**
+
+```typescript
+/**
+ * @param token - The token index to link
+ * @param address - The address of the ERC20 contract on the EVM.
+ * @param evmExtraWeiDecimals - Difference in Wei decimals (EVM - Core).
+ */
+interface RequestEvmContract {
+  type: "requestEvmContract";
+  token: number;
+  address: address;
+  evmExtraWeiDecimals: number;
+}
+```
+
+* **Next:** HyperCore stores pending EVM address to link.
+* **Deployer** must verify their intent by:
+
+  * (a) Sending action with the nonce used to deploy (EOA deploy)
+  * (b) Using first storage slot or custom slot with the finalizer address (if contract-deployed)
+
+**Finalize link:**
+
+```typescript
+/**
+ * @param input - One of the EVM deployer options
+ */
+interface FinalizeEvmContract {
+  type: "finalizeEvmContract";
+  token: number;
+  input: { "create": { "nonce": number } } | "firstStorageSlot" | "customStorageSlot";
+}
+```
+
+#### Caveats
+
+* No checks that system address has sufficient supply or is a valid ERC20.
+* *Always verify contract code and balance!*
+* If extra Wei decimals, non-round amounts (not ending in correct zeros) are burned (<1 Wei lost).
+
+#### Mainnet PURR Example
+
+* **ERC20 address:** 0x9b498C3c8A0b8CD8BA1D9851d40D186F1872b44E
+* **Solidity:**
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.28;
+import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Permit.sol";
+contract Purr is ERC20Permit {
+    constructor() ERC20("Purr", "PURR") ERC20Permit("Purr") {
+        address initialHolder = 0x2000000000000000000000000000000000000001;
+        uint256 initialBalance = 600000000;
+        _mint(initialHolder, initialBalance * 10 ** decimals());
+    }
+}
+```
+
+#### Final Notes
+
+* *evm\_erc20.py* (attached in docs) provides a sample script for ERC20 deployment and linking.
+
+---
+
+## HyperEVM
+
+### Wrapped HYPE (WHYPE)
+
+* Canonical system contract at `0x555...5`
+* Immutable, same code as WETH on Ethereum (except name/symbol)
+
+**Source code:**
+
+```solidity
+pragma solidity >=0.4.22 <0.6;
+
+contract WHYPE9 {
+  string public name = "Wrapped HYPE";
+  string public symbol = "WHYPE";
+  uint8 public decimals = 18;
+  event Approval(address indexed src, address indexed guy, uint wad);
+  event Transfer(address indexed src, address indexed dst, uint wad);
+  event Deposit(address indexed dst, uint wad);
+  event Withdrawal(address indexed src, uint wad);
+  mapping(address => uint) public balanceOf;
+  mapping(address => mapping(address => uint)) public allowance;
+  function() external payable { deposit(); }
+  function deposit() public payable {
+    balanceOf[msg.sender] += msg.value;
+    emit Deposit(msg.sender, msg.value);
+  }
+  function withdraw(uint wad) public {
+    require(balanceOf[msg.sender] >= wad);
+    balanceOf[msg.sender] -= wad;
+    msg.sender.transfer(wad);
+    emit Withdrawal(msg.sender, wad);
+  }
+  function totalSupply() public view returns (uint) {
+    return address(this).balance;
+  }
+  function approve(address guy, uint wad) public returns (bool) {
+    allowance[msg.sender][guy] = wad;
+    emit Approval(msg.sender, guy, wad);
+    return true;
+  }
+  function transfer(address dst, uint wad) public returns (bool) {
+    return transferFrom(msg.sender, dst, wad);
+  }
+  function transferFrom(address src, address dst, uint wad) public returns (bool) {
+    require(balanceOf[src] >= wad);
+    if (src != msg.sender && allowance[src][msg.sender] != uint(-1)) {
+      require(allowance[src][msg.sender] >= wad);
+      allowance[src][msg.sender] -= wad;
+    }
+    balanceOf[src] -= wad;
+    balanceOf[dst] += wad;
+    emit Transfer(src, dst, wad);
+    return true;
+  }
+}
+```
+
+---
+
+## HyperEVM
+
+### JSON-RPC
+
+**Supported Endpoints (CSV):**
+
+```
+Endpoint,Notes
+net_version,
+web3_clientVersion,
+eth_blockNumber,
+eth_call,"Only latest block supported"
+eth_chainId,
+eth_estimateGas,"Only latest block supported"
+eth_feeHistory,
+eth_gasPrice,"Returns base fee for next small block"
+eth_getBalance,"Only latest block supported"
+eth_getBlockByHash,
+eth_getBlockByNumber,
+eth_getBlockReceipts,
+eth_getBlockTransactionCountByHash,
+eth_getBlockTransactionCountByNumber,
+eth_getCode,"Only latest block supported"
+eth_getLogs,"Up to 4 topics, up to 50 blocks in query range"
+eth_getStorageAt,"Only latest block supported"
+eth_getTransactionByBlockHashAndIndex,
+eth_getTransactionByBlockNumberAndIndex,
+eth_getTransactionByHash,
+eth_getTransactionCount,"Only latest block supported"
+eth_getTransactionReceipt,
+eth_maxPriorityFeePerGas,"Always returns zero currently"
+eth_syncing,"Always returns false"
+```
+
+**Custom Endpoints (CSV):**
+
+```
+Endpoint,Notes
+eth_bigBlockGasPrice,Returns base fee for next big block
+eth_usingBigBlocks,Returns whether the address is using big blocks
+eth_getSystemTxsByBlockHash,Returns system txs from HyperCore for given block hash
+eth_getSystemTxsByBlockNumber,Returns system txs from HyperCore for given block number
+```
+
+* **Unsupported:** Requests requiring historical state (default RPC).
+* **Archive nodes:** Available for advanced use; see GitHub for examples.
+* **Rate limits:** IP-based, same as API server.
+
+---------------------------------------------------------------------
+
+# For Developers
+
+## Nodes
+
+### Documentation for Running Nodes
+
+* See: [https://github.com/hyperliquid-dex/node](https://github.com/hyperliquid-dex/node) for validator/non-validator setup instructions.
+
+---
+
+### L1 Data Schemas
+
+* Node writes data to `~/hl/data`
+* **Default log generation:** \~100 GB/day (archive or prune old files recommended)
+* **Auxiliary data options:** See command-line flags in node repo
+
+---
+
+#### Transaction Blocks
+
+**Blocks as transactions are streamed to:**
+
+```
+~/hl/data/replica_cmds/{start_time}/{date}/{height}
+```
+
+---
+
+#### State Snapshots
+
+**Saved every 10,000 blocks to:**
+
+```
+~/hl/data/periodic_abci_states/{date}/{height}.rmp
+```
+
+---
+
+#### Trades
+
+**Trades saved to:**
+
+```
+~/hl/data/node_trades/hourly/{date}/{hour}
+```
+
+**Example trade JSON:**
+
+```json
+{
+  "coin": "COMP",
+  "side": "B",
+  "time": "2024-07-26T08:26:25.899",
+  "px": "51.367",
+  "sz": "0.31",
+  "hash": "0xad8e0566e813bdf98176040e6d51bd011100efa789e89430cdf17964235f55d8",
+  "trade_dir_override": "Na",
+  "side_info": [
+    {
+      "user": "0xc64cc00b46101bd40aa1c3121195e85c0b0918d8",
+      "start_pos": "996.67",
+      "oid": 12212201265,
+      "twap_id": null,
+      "cloid": null
+    },
+    {
+      "user": "0x768484f7e2ebb675c57838366c02ae99ba2a9b08",
+      "start_pos": "-996.7",
+      "oid": 12212198275,
+      "twap_id": null,
+      "cloid": null
+    }
+  ]
+}
+```
+
+---
+
+#### Order Statuses
+
+**Saved to:**
+
+```
+~/hl/data/node_order_statuses/hourly/{date}/{hour}
+```
+
+**Example order status JSON:**
+
+```json
+{
+  "time": "2024-07-26T08:31:48.717",
+  "user": "0xc64cc00b46101bd40aa1c3121195e85c0b0918d8",
+  "status": "canceled",
+  "order": {
+    "coin": "INJ",
+    "side": "A",
+    "limitPx": "25.381",
+    "sz": "257.0",
+    "oid": 12212359592,
+    "timestamp": 1721982700270,
+    "triggerCondition": "N/A",
+    "isTrigger": false,
+    "triggerPx": "0.0",
+    "children": [],
+    "isPositionTpsl": false,
+    "reduceOnly": false,
+    "orderType": "Limit",
+    "origSz": "257.0",
+    "tif": "Alo",
+    "cloid": null
+  }
+}
+```
+
+---
+
+#### Miscellaneous Events
+
+**Saved to:**
+
+```
+~/hl/data/misc_events/hourly/{date}/{hour}
+```
+
+**Misc events include:**
+
+* Staking deposits, delegations, withdrawals
+* Validator rewards
+* Ledger updates (funding, spot transfers, etc)
+
+**TypeScript schema (abridged):**
+
+```typescript
+type MiscEvent = {
+  time: string;
+  hash: string;
+  inner: MiscEventInner;
+}
+type MiscEventInner = CDeposit | Delegation | CWithdrawal | ValidatorRewards | Funding | LedgerUpdate;
+
+type CDeposit = { user: string; amount: number; }
+type Delegation = { user: string; validator: string; amount: number; is_undelegate: boolean; }
+type CWithdrawal = { user: string; amount: number; is_finalized: boolean; }
+type ValidatorRewards = { validator_to_reward: Array<[string, number]>; }
+type Funding = { coin: string; usdc: number; szi: number; fundingRate: number; nSamples: number; }
+type LedgerUpdate = { users: Array<string>; delta: LedgerDelta; }
+// ...plus full LedgerDelta union type as above
+```
+
+---
+
+#### L4 Snapshots
+
+* **L4 book snapshot = full order book, all order info per level**
+* Used as a realtime checkpoint with order status streams
+
+**Format:**
+
+```json
+[
+  [
+    "BTC",
+    [
+      [ // bids
+        {
+          "coin": "BTC",
+          "side": "B",
+          "limitPx": "103988.0",
+          "sz": "0.2782",
+          "oid": 30112287571,
+          "timestamp": 1747157301016,
+          "triggerCondition": "N/A",
+          "isTrigger": false,
+          "triggerPx": "0.0",
+          "children": [],
+          "isPositionTpsl": false,
+          "reduceOnly": false,
+          "orderType": "Limit",
+          "origSz": "0.2782",
+          "tif": "Alo",
+          "cloid": null
+        },
+        ...
+      ],
+      [ // asks
+        {
+          "coin": "BTC",
+          "side": "A",
+          "limitPx": "93708.0",
+          "sz": "0.00047",
+          "oid": 30073539988,
+          "timestamp": 1747128626867,
+          "triggerCondition": "Price below 101856",
+          "isTrigger": true,
+          "triggerPx": "101856.0",
+          "children": [],
+          "isPositionTpsl": false,
+          "reduceOnly": true,
+          "orderType": "Stop Market",
+          "origSz": "0.00047",
+          "tif": null,
+          "cloid": null
+        },
+        ...
+      ]
+    ]
+  ],
+  [
+    "ETH", ...
+  ],
+  [
+    "SOL", ...
+  ]
+]
+```
+
+-------------------------------------------------------------
